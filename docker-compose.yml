@@ -1,0 +1,160 @@
+version: "3.9"
+
+services:
+  # ═══════════════════════════════════════════════════════════════════════════
+  # API Server
+  # ═══════════════════════════════════════════════════════════════════════════
+  api:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    container_name: trustmodel-api
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://trustmodel:trustmodel@db:5432/trustmodel
+      - REDIS_URL=redis://redis:6379/0
+      - SECRET_KEY=${SECRET_KEY:-your-secret-key-change-in-production}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - ROOT_CA_PRIVATE_KEY=${ROOT_CA_PRIVATE_KEY:-}
+      - DEBUG=${DEBUG:-false}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    volumes:
+      - ./server:/app
+      - ca-keys:/app/ca_keys
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    networks:
+      - trustmodel-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # PostgreSQL Database
+  # ═══════════════════════════════════════════════════════════════════════════
+  db:
+    image: postgres:16-alpine
+    container_name: trustmodel-db
+    environment:
+      - POSTGRES_USER=trustmodel
+      - POSTGRES_PASSWORD=trustmodel
+      - POSTGRES_DB=trustmodel
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - trustmodel-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U trustmodel -d trustmodel"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Redis Cache & Message Broker
+  # ═══════════════════════════════════════════════════════════════════════════
+  redis:
+    image: redis:7-alpine
+    container_name: trustmodel-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - trustmodel-network
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Celery Worker (Background Jobs)
+  # ═══════════════════════════════════════════════════════════════════════════
+  worker:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    container_name: trustmodel-worker
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://trustmodel:trustmodel@db:5432/trustmodel
+      - REDIS_URL=redis://redis:6379/0
+      - SECRET_KEY=${SECRET_KEY:-your-secret-key-change-in-production}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - C_FORCE_ROOT=1
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    volumes:
+      - ./server:/app
+      - ca-keys:/app/ca_keys
+    command: celery -A app.workers.celery_app worker --loglevel=info --concurrency=4
+    networks:
+      - trustmodel-network
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Celery Beat (Scheduled Tasks)
+  # ═══════════════════════════════════════════════════════════════════════════
+  beat:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    container_name: trustmodel-beat
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://trustmodel:trustmodel@db:5432/trustmodel
+      - REDIS_URL=redis://redis:6379/0
+      - SECRET_KEY=${SECRET_KEY:-your-secret-key-change-in-production}
+      - C_FORCE_ROOT=1
+    depends_on:
+      - redis
+      - worker
+    volumes:
+      - ./server:/app
+    command: celery -A app.workers.celery_app beat --loglevel=info
+    networks:
+      - trustmodel-network
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Flower (Celery Monitoring) - Optional
+  # ═══════════════════════════════════════════════════════════════════════════
+  flower:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    container_name: trustmodel-flower
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+    ports:
+      - "5555:5555"
+    depends_on:
+      - redis
+      - worker
+    command: celery -A app.workers.celery_app flower --port=5555
+    networks:
+      - trustmodel-network
+    profiles:
+      - monitoring
+
+volumes:
+  postgres-data:
+    driver: local
+  redis-data:
+    driver: local
+  ca-keys:
+    driver: local
+
+networks:
+  trustmodel-network:
+    driver: bridge
