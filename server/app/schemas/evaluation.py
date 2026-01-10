@@ -38,11 +38,18 @@ class EvaluationRequest(BaseModel):
     config: EvaluationConfig = Field(default_factory=EvaluationConfig)
 
 
-class SuiteResult(BaseModel):
+class EvaluationSuiteResult(BaseModel):
     """Results for a single evaluation suite."""
 
+    suite: str
     score: float
+    passed: int
+    total: int
     tests: Dict[str, Any]
+
+
+# Alias for backwards compatibility
+SuiteResult = EvaluationSuiteResult
 
 
 class EvaluationResponse(BaseModel):

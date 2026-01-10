@@ -89,7 +89,7 @@ class CertificateVerifyResponse(BaseModel):
     signature_valid: bool = False
 
 
-class RevokeRequest(BaseModel):
+class CertificateRevokeRequest(BaseModel):
     """Request to revoke a certificate."""
 
     reason: str = Field(..., min_length=10, max_length=1000)

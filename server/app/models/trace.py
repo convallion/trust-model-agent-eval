@@ -76,8 +76,8 @@ class Trace(Base, UUIDMixin, TimestampMixin):
     total_cost_usd: Mapped[Optional[float]] = mapped_column(nullable=True)
     tool_call_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
-    # Metadata
-    metadata: Mapped[dict[str, Any]] = mapped_column(
+    # Metadata (using trace_metadata as 'metadata' is reserved by SQLAlchemy)
+    trace_metadata: Mapped[dict[str, Any]] = mapped_column(
         JSONB,
         default=dict,
         nullable=False,

@@ -45,7 +45,7 @@ class TraceService:
             total_tokens=total_tokens,
             total_cost_usd=total_cost if total_cost > 0 else None,
             tool_call_count=tool_call_count,
-            metadata=data.metadata,
+            trace_metadata=data.metadata,
         )
         self.db.add(trace)
         await self.db.flush()
@@ -195,7 +195,7 @@ class TraceService:
             "total_tokens": trace.total_tokens,
             "total_cost_usd": trace.total_cost_usd,
             "tool_call_count": trace.tool_call_count,
-            "metadata": trace.metadata,
+            "metadata": trace.trace_metadata,
             "created_at": trace.created_at,
         }
 

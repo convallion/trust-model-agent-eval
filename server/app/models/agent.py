@@ -68,8 +68,8 @@ class Agent(Base, UUIDMixin, TimestampMixin):
         default=AgentStatus.ACTIVE,
     )
 
-    # Metadata
-    metadata: Mapped[dict[str, Any]] = mapped_column(
+    # Metadata (using agent_metadata as 'metadata' is reserved by SQLAlchemy)
+    agent_metadata: Mapped[dict[str, Any]] = mapped_column(
         JSONB,
         default=dict,
         nullable=False,

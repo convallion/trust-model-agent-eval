@@ -33,7 +33,7 @@ class AgentService:
             framework=data.framework,
             version=data.version,
             declared_capabilities=data.declared_capabilities,
-            metadata=data.metadata,
+            agent_metadata=data.metadata,
             organization_id=organization_id,
         )
         self.db.add(agent)
@@ -163,7 +163,7 @@ class AgentService:
             "version": agent.version,
             "status": agent.status,
             "declared_capabilities": agent.declared_capabilities,
-            "metadata": agent.metadata,
+            "metadata": agent.agent_metadata,
             "organization_id": agent.organization_id,
             "organization_name": agent.organization.name if agent.organization else None,
             "created_at": agent.created_at,

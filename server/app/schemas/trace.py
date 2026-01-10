@@ -82,6 +82,13 @@ class TraceResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class TraceBatchResponse(BaseModel):
+    """Response for batch trace ingestion."""
+
+    created: int
+    trace_ids: List[UUID]
+
+
 class TraceListResponse(BaseModel):
     """Paginated list of traces."""
 

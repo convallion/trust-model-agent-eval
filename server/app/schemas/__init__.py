@@ -16,8 +16,8 @@ from app.schemas.auth import (
 from app.schemas.certificate import (
     CertificateIssueRequest,
     CertificateResponse,
+    CertificateRevokeRequest,
     CertificateVerifyResponse,
-    RevokeRequest,
 )
 from app.schemas.evaluation import (
     EvaluationRequest,
@@ -58,7 +58,7 @@ __all__ = [
     "CertificateIssueRequest",
     "CertificateResponse",
     "CertificateVerifyResponse",
-    "RevokeRequest",
+    "CertificateRevokeRequest",
     # Session
     "SessionCreate",
     "SessionResponse",
