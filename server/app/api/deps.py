@@ -126,3 +126,11 @@ async def get_current_active_superuser(
             detail="Not enough permissions",
         )
     return current_user
+
+
+async def get_current_user_ws(
+    token: str,
+    db: AsyncSession = Depends(get_db),
+) -> User:
+    """Get current user from a token string (for WebSocket endpoints)."""
+    return await _authenticate_jwt(token, db)

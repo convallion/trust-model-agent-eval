@@ -67,6 +67,90 @@ class EvaluationService:
 
         return evaluations, total
 
+    async def list(
+        self,
+        organization_id: uuid.UUID,
+        agent_id: Optional[uuid.UUID] = None,
+        status: Optional[EvaluationStatus] = None,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> Tuple[List[EvaluationRun], int]:
+        """List evaluations for an organization with pagination."""
+        from app.models.agent import Agent
+
+        query = (
+            select(EvaluationRun)
+            .join(Agent, EvaluationRun.agent_id == Agent.id)
+            .where(Agent.organization_id == organization_id)
+        )
+
+        if agent_id:
+            query = query.where(EvaluationRun.agent_id == agent_id)
+
+        if status:
+            query = query.where(EvaluationRun.status == status)
+
+        # Get total count
+        count_query = select(func.count()).select_from(query.subquery())
+        total = await self.db.scalar(count_query) or 0
+
+        # Get paginated results
+        query = (
+            query.order_by(EvaluationRun.created_at.desc())
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        )
+        result = await self.db.execute(query)
+        evaluations = list(result.scalars().all())
+
+        return evaluations, total
+
+    async def run_evaluation(self, evaluation_id: uuid.UUID) -> None:
+        """Run the actual evaluation (mock implementation for demo)."""
+        import asyncio
+        import random
+
+        evaluation = await self.get(evaluation_id)
+        if not evaluation:
+            return
+
+        # Mark as started
+        await self.start(evaluation_id)
+        await self.db.commit()
+
+        # Simulate running evaluation suites
+        results = {}
+        for i, suite in enumerate(evaluation.suites):
+            await self.update_progress(
+                evaluation_id,
+                progress_percent=int((i / len(evaluation.suites)) * 100),
+                current_suite=suite,
+                current_test=f"Running {suite} tests...",
+            )
+            await self.db.commit()
+
+            # Simulate test execution time
+            await asyncio.sleep(1)
+
+            # Generate mock scores (for demo purposes)
+            # In a real implementation, this would run actual evaluation tasks
+            base_score = random.uniform(70, 95)
+            results[suite] = {
+                "score": base_score,
+                "tests_passed": random.randint(15, 20),
+                "tests_failed": random.randint(0, 5),
+                "tests_total": 20,
+                "details": {
+                    "test_1": {"passed": True, "score": random.uniform(0.7, 1.0)},
+                    "test_2": {"passed": True, "score": random.uniform(0.7, 1.0)},
+                    "test_3": {"passed": random.random() > 0.2, "score": random.uniform(0.5, 1.0)},
+                }
+            }
+
+        # Complete the evaluation
+        await self.complete(evaluation_id, results)
+        await self.db.commit()
+
     async def start(self, evaluation_id: uuid.UUID) -> Optional[EvaluationRun]:
         """Mark evaluation as started."""
         evaluation = await self.get(evaluation_id)

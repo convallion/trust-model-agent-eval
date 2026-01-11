@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 import { formatDistanceToNow, format } from "date-fns";
 import { ShieldCheckIcon } from "@heroicons/react/24/outline";
+import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { api } from "@/lib/api";
 import { GradeBadge } from "@/components/ui/GradeBadge";
 import { StatusBadge } from "@/components/ui/StatusBadge";
@@ -15,6 +16,7 @@ export default function CertificatesPage() {
   });
 
   return (
+    <DashboardLayout>
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold text-gray-900">Certificates</h1>
@@ -123,5 +125,6 @@ export default function CertificatesPage() {
         )}
       </div>
     </div>
+    </DashboardLayout>
   );
 }

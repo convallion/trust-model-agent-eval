@@ -4,86 +4,66 @@ import {
   CpuChipIcon,
   ChartBarIcon,
   ShieldCheckIcon,
-  ExclamationTriangleIcon,
+  DocumentTextIcon,
 } from "@heroicons/react/24/outline";
-import type { Agent, Evaluation } from "@/lib/api";
+import type { DashboardStats } from "@/lib/api";
 
 interface StatsCardsProps {
-  agents: Agent[];
-  evaluations: Evaluation[];
+  stats: DashboardStats | null;
 }
 
-export function StatsCards({ agents, evaluations }: StatsCardsProps) {
-  const activeAgents = agents.filter((a) => a.status === "active").length;
-  const completedEvals = evaluations.filter(
-    (e) => e.status === "completed"
-  ).length;
-  const certifiedAgents = agents.filter(
-    (a) => a.stats?.latest_certificate_grade
-  ).length;
-  const failedEvals = evaluations.filter((e) => e.status === "failed").length;
-
-  const stats = [
+export function StatsCards({ stats }: StatsCardsProps) {
+  const cards = [
     {
-      name: "Active Agents",
-      value: activeAgents,
+      name: "Total Agents",
+      value: stats?.total_agents || 0,
+      subtext: `${stats?.active_agents || 0} active in last 24h`,
       icon: CpuChipIcon,
       color: "bg-blue-500",
-      change: "+2 this week",
-      changeType: "positive" as const,
     },
     {
-      name: "Evaluations Run",
-      value: completedEvals,
-      icon: ChartBarIcon,
+      name: "Total Traces",
+      value: stats?.total_traces || 0,
+      subtext: "Interactions recorded",
+      icon: DocumentTextIcon,
       color: "bg-purple-500",
-      change: "+12 this week",
-      changeType: "positive" as const,
     },
     {
-      name: "Certified Agents",
-      value: certifiedAgents,
+      name: "Evaluations",
+      value: stats?.total_evaluations || 0,
+      subtext: `${stats?.completed_evaluations || 0} completed`,
+      icon: ChartBarIcon,
+      color: "bg-indigo-500",
+    },
+    {
+      name: "Certificates",
+      value: stats?.active_certificates || 0,
+      subtext: stats?.avg_trust_score
+        ? `Avg score: ${stats.avg_trust_score.toFixed(1)}`
+        : "No certificates yet",
       icon: ShieldCheckIcon,
       color: "bg-green-500",
-      change: "+1 this week",
-      changeType: "positive" as const,
-    },
-    {
-      name: "Failed Evaluations",
-      value: failedEvals,
-      icon: ExclamationTriangleIcon,
-      color: "bg-red-500",
-      change: failedEvals > 0 ? "Needs attention" : "All passing",
-      changeType: failedEvals > 0 ? ("negative" as const) : ("positive" as const),
     },
   ];
 
   return (
     <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4">
-      {stats.map((stat) => (
+      {cards.map((card) => (
         <div
-          key={stat.name}
+          key={card.name}
           className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 card-hover"
         >
           <div className="flex items-center">
-            <div className={`${stat.color} rounded-lg p-3`}>
-              <stat.icon className="h-6 w-6 text-white" />
+            <div className={`${card.color} rounded-lg p-3`}>
+              <card.icon className="h-6 w-6 text-white" />
             </div>
             <div className="ml-4">
-              <p className="text-sm font-medium text-gray-500">{stat.name}</p>
-              <p className="text-2xl font-bold text-gray-900">{stat.value}</p>
+              <p className="text-sm font-medium text-gray-500">{card.name}</p>
+              <p className="text-2xl font-bold text-gray-900">{card.value}</p>
             </div>
           </div>
           <div className="mt-4">
-            <span
-              className={`text-sm ${
-                stat.changeType === "positive"
-                  ? "text-green-600"
-                  : "text-red-600"
-              }`}
-            >
-              {stat.change}
-            </span>
+            <span className="text-sm text-gray-500">{card.subtext}</span>
           </div>
         </div>
       ))}

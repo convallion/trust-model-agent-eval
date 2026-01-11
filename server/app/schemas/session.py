@@ -82,14 +82,14 @@ class MessageEnvelope(BaseModel):
     """TACP message envelope."""
 
     protocol_version: str = "TACP/1.0"
-    message_id: UUID
-    timestamp: datetime
-    sender_agent_id: UUID
-    sender_certificate_id: UUID
-    recipient_agent_id: UUID
-    message_type: str
-    payload: Dict[str, Any]
-    signature: str
+    message_id: Optional[UUID] = None  # Auto-generated if not provided
+    timestamp: Optional[datetime] = None  # Auto-set if not provided
+    sender_id: UUID  # The sending agent's ID
+    sender_certificate_id: Optional[UUID] = None  # May not have certificate
+    recipient_id: UUID  # The receiving agent's ID
+    message_type: str  # "task_request", "task_response", "status", "error"
+    payload: Dict[str, Any] = Field(default_factory=dict)
+    signature: Optional[str] = None  # Optional signature for verification
 
 
 class TaskRequest(BaseModel):

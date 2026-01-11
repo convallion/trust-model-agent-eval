@@ -1,0 +1,337 @@
+#!/usr/bin/env python3
+"""
+TrustModel Trace Wrapper - Automatically trace any agent/command
+
+Usage:
+    tm-trace --agent <agent-id> <command> [args...]
+
+Examples:
+    tm-trace --agent abc123 claude -p "Hello"
+    tm-trace --agent abc123 python my_agent.py
+    tm-trace --agent abc123 node agent.js
+
+The wrapper will:
+1. Run the command
+2. Capture output in real-time
+3. Send traces to TrustModel API
+4. Show live trace updates in the terminal
+"""
+
+import argparse
+import json
+import os
+import subprocess
+import sys
+import time
+import threading
+import uuid
+from datetime import datetime, timezone
+from queue import Queue
+
+try:
+    import requests
+except ImportError:
+    print("Error: requests library not installed. Run: pip install requests")
+    sys.exit(1)
+
+
+class TraceCollector:
+    """Collects and sends traces to TrustModel."""
+
+    def __init__(self, api_url: str, token: str, agent_id: str):
+        self.api_url = api_url.rstrip("/")
+        self.token = token
+        self.agent_id = agent_id
+        self.trace_id = None
+        self.spans = []
+        self.current_span_id = None
+
+    def start_trace(self, command: str) -> str:
+        """Start a new trace."""
+        self.trace_id = str(uuid.uuid4())
+
+        # Create initial span
+        span = {
+            "span_type": "agent",
+            "name": f"command: {command}",
+            "started_at": datetime.now(timezone.utc).isoformat(),
+            "status": "running",
+            "attributes": {
+                "command": command,
+                "client_span_id": "root",
+            }
+        }
+        self.spans.append(span)
+        self._send_trace()
+        return self.trace_id
+
+    def add_llm_span(self, model: str, input_text: str, output_text: str, latency_ms: int):
+        """Add an LLM call span."""
+        span = {
+            "span_type": "llm",
+            "name": f"llm_call: {model}",
+            "started_at": datetime.now(timezone.utc).isoformat(),
+            "ended_at": datetime.now(timezone.utc).isoformat(),
+            "status": "success",
+            "attributes": {
+                "model": model,
+                "input_preview": input_text[:200] if input_text else None,
+                "output_preview": output_text[:200] if output_text else None,
+                "latency_ms": latency_ms,
+            }
+        }
+        self.spans.append(span)
+        self._send_trace()
+
+    def add_tool_span(self, tool_name: str, success: bool, duration_ms: int = 0, details: dict = None):
+        """Add a tool call span."""
+        span = {
+            "span_type": "tool",
+            "name": f"tool: {tool_name}",
+            "started_at": datetime.now(timezone.utc).isoformat(),
+            "ended_at": datetime.now(timezone.utc).isoformat(),
+            "status": "success" if success else "error",
+            "attributes": {
+                "tool_name": tool_name,
+                "duration_ms": duration_ms,
+                **(details or {}),
+            }
+        }
+        self.spans.append(span)
+        self._send_trace()
+
+    def add_output_span(self, output: str, is_error: bool = False):
+        """Add an output span."""
+        span = {
+            "span_type": "agent",
+            "name": "output" if not is_error else "error",
+            "started_at": datetime.now(timezone.utc).isoformat(),
+            "ended_at": datetime.now(timezone.utc).isoformat(),
+            "status": "error" if is_error else "success",
+            "attributes": {
+                "output_preview": output[:500] if output else None,
+                "output_length": len(output) if output else 0,
+            }
+        }
+        self.spans.append(span)
+        self._send_trace()
+
+    def end_trace(self, success: bool, exit_code: int):
+        """End the trace."""
+        # Update root span
+        if self.spans:
+            self.spans[0]["ended_at"] = datetime.now(timezone.utc).isoformat()
+            self.spans[0]["status"] = "success" if success else "error"
+            self.spans[0]["attributes"]["exit_code"] = exit_code
+
+        self._send_trace()
+
+    def _send_trace(self):
+        """Send trace data to TrustModel API."""
+        if not self.spans:
+            return
+
+        try:
+            response = requests.post(
+                f"{self.api_url}/v1/traces/ingest",
+                headers={
+                    "Authorization": f"Bearer {self.token}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "agent_id": self.agent_id,
+                    "trace_id": self.trace_id,
+                    "spans": self.spans,
+                    "metadata": {
+                        "source": "tm-trace",
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                    }
+                },
+                timeout=5,
+            )
+
+            if response.status_code == 200:
+                data = response.json()
+                if not self.trace_id:
+                    self.trace_id = data.get("trace_id")
+                # Clear sent spans (keep only new ones)
+                self.spans = []
+            else:
+                print(f"\033[33m[TM] Warning: Failed to send trace: {response.status_code}\033[0m", file=sys.stderr)
+
+        except Exception as e:
+            print(f"\033[33m[TM] Warning: Could not send trace: {e}\033[0m", file=sys.stderr)
+
+
+def parse_claude_output(line: str, collector: TraceCollector):
+    """Parse Claude Code JSON output and extract trace info."""
+    try:
+        data = json.loads(line)
+
+        # Handle different Claude Code output types
+        if "type" in data:
+            msg_type = data["type"]
+
+            if msg_type == "assistant":
+                # LLM response
+                content = data.get("message", {}).get("content", [])
+                text = ""
+                for block in content:
+                    if block.get("type") == "text":
+                        text += block.get("text", "")
+                collector.add_llm_span(
+                    model=data.get("message", {}).get("model", "claude"),
+                    input_text="",
+                    output_text=text,
+                    latency_ms=0,
+                )
+
+            elif msg_type == "tool_use":
+                # Tool call started
+                tool_name = data.get("name", "unknown")
+                collector.add_tool_span(tool_name, success=True, details={"input": data.get("input")})
+
+            elif msg_type == "tool_result":
+                # Tool call completed
+                pass  # Already captured in tool_use
+
+            elif msg_type == "result":
+                # Final result
+                collector.add_output_span(json.dumps(data.get("result", "")))
+
+    except json.JSONDecodeError:
+        # Not JSON, might be regular output
+        if line.strip():
+            collector.add_output_span(line)
+
+
+def run_command(args: list, collector: TraceCollector) -> int:
+    """Run command and capture output."""
+    command_str = " ".join(args)
+    print(f"\033[36m[TM] Starting trace for: {command_str}\033[0m")
+    print(f"\033[36m[TM] Trace ID: {collector.trace_id}\033[0m")
+    print("-" * 50)
+
+    start_time = time.time()
+
+    try:
+        process = subprocess.Popen(
+            args,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+        )
+
+        # Create queues for output
+        stdout_queue = Queue()
+        stderr_queue = Queue()
+
+        def read_stdout():
+            for line in process.stdout:
+                stdout_queue.put(("stdout", line))
+            stdout_queue.put(("done", None))
+
+        def read_stderr():
+            for line in process.stderr:
+                stderr_queue.put(("stderr", line))
+            stderr_queue.put(("done", None))
+
+        # Start reader threads
+        stdout_thread = threading.Thread(target=read_stdout, daemon=True)
+        stderr_thread = threading.Thread(target=read_stderr, daemon=True)
+        stdout_thread.start()
+        stderr_thread.start()
+
+        stdout_done = False
+        stderr_done = False
+
+        # Process output in real-time
+        while not (stdout_done and stderr_done):
+            # Check stdout
+            try:
+                while True:
+                    source, line = stdout_queue.get_nowait()
+                    if source == "done":
+                        stdout_done = True
+                        break
+                    print(line, end="")
+                    # Try to parse for Claude Code output
+                    if args[0] in ["claude", "python", "node"]:
+                        parse_claude_output(line, collector)
+            except:
+                pass
+
+            # Check stderr
+            try:
+                while True:
+                    source, line = stderr_queue.get_nowait()
+                    if source == "done":
+                        stderr_done = True
+                        break
+                    print(line, end="", file=sys.stderr)
+                    collector.add_output_span(line, is_error=True)
+            except:
+                pass
+
+            time.sleep(0.01)
+
+        process.wait()
+        exit_code = process.returncode
+
+    except FileNotFoundError:
+        print(f"\033[31m[TM] Error: Command not found: {args[0]}\033[0m", file=sys.stderr)
+        collector.end_trace(False, 127)
+        return 127
+    except KeyboardInterrupt:
+        print(f"\n\033[33m[TM] Interrupted\033[0m")
+        process.terminate()
+        collector.end_trace(False, 130)
+        return 130
+
+    duration = time.time() - start_time
+
+    print("-" * 50)
+    print(f"\033[36m[TM] Command completed in {duration:.2f}s with exit code {exit_code}\033[0m")
+
+    collector.end_trace(exit_code == 0, exit_code)
+    return exit_code
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="TrustModel Trace Wrapper - Trace any agent/command",
+        usage="tm-trace --agent <agent-id> <command> [args...]",
+    )
+    parser.add_argument("--agent", "-a", required=True, help="Agent ID to associate traces with")
+    parser.add_argument("--api-url", default=os.environ.get("TRUSTMODEL_API_URL", "http://localhost:8000"),
+                        help="TrustModel API URL")
+    parser.add_argument("--token", default=os.environ.get("TRUSTMODEL_TOKEN"),
+                        help="TrustModel API token (or set TRUSTMODEL_TOKEN env var)")
+    parser.add_argument("command", nargs=argparse.REMAINDER, help="Command to run")
+
+    args = parser.parse_args()
+
+    if not args.command:
+        parser.error("No command specified")
+
+    if not args.token:
+        print("\033[31m[TM] Error: No token provided. Set TRUSTMODEL_TOKEN or use --token\033[0m", file=sys.stderr)
+        sys.exit(1)
+
+    # Create collector
+    collector = TraceCollector(args.api_url, args.token, args.agent)
+
+    # Start trace
+    collector.start_trace(" ".join(args.command))
+
+    # Run command
+    exit_code = run_command(args.command, collector)
+
+    print(f"\033[36m[TM] View trace at: {args.api_url.replace(':8000', ':3001')}/traces/{collector.trace_id}\033[0m")
+
+    sys.exit(exit_code)
+
+
+if __name__ == "__main__":
+    main()

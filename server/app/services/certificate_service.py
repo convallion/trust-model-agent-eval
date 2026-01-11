@@ -33,6 +33,7 @@ class CertificateService:
         self,
         agent_id: uuid.UUID,
         evaluation_id: uuid.UUID,
+        validity_days: Optional[int] = None,
     ) -> Certificate:
         """Issue a new certificate based on evaluation results."""
         # Get evaluation
@@ -59,9 +60,8 @@ class CertificateService:
         await self._revoke_existing_certificates(agent_id, "Superseded by new certificate")
 
         # Calculate expiry
-        expires_at = datetime.now(timezone.utc) + timedelta(
-            days=settings.certificate_validity_days
-        )
+        days = validity_days if validity_days else settings.certificate_validity_days
+        expires_at = datetime.now(timezone.utc) + timedelta(days=days)
 
         # Build safety attestations from results
         safety_attestations = self._build_safety_attestations(evaluation.results)
@@ -220,6 +220,45 @@ class CertificateService:
         await self.db.flush()
         return certificate
 
+    async def list(
+        self,
+        organization_id: uuid.UUID,
+        agent_id: Optional[uuid.UUID] = None,
+        status: Optional[CertificateStatus] = None,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> Tuple[List[Certificate], int]:
+        """List certificates for an organization."""
+        from app.models.agent import Agent
+
+        query = (
+            select(Certificate)
+            .join(Agent, Certificate.agent_id == Agent.id)
+            .where(Agent.organization_id == organization_id)
+            .options(joinedload(Certificate.agent))
+        )
+
+        if agent_id:
+            query = query.where(Certificate.agent_id == agent_id)
+
+        if status:
+            query = query.where(Certificate.status == status)
+
+        # Get total count
+        count_query = select(func.count()).select_from(query.subquery())
+        total = await self.db.scalar(count_query) or 0
+
+        # Get paginated results
+        query = (
+            query.order_by(Certificate.issued_at.desc())
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        )
+        result = await self.db.execute(query)
+        certificates = list(result.scalars().all())
+
+        return certificates, total
+
     async def list_for_agent(
         self,
         agent_id: uuid.UUID,
@@ -352,7 +391,7 @@ class CertificateService:
 
         return list(set(capabilities))
 
-    def to_response(self, certificate: Certificate) -> CertificateResponse:
+    async def to_response(self, certificate: Certificate) -> CertificateResponse:
         """Convert certificate model to response schema."""
         return CertificateResponse(
             id=certificate.id,
@@ -392,3 +431,214 @@ class CertificateService:
             issuer_certificate_id=certificate.issuer_certificate_id,
             created_at=certificate.created_at,
         )
+
+    async def search_registry(
+        self,
+        agent_name: Optional[str] = None,
+        organization_name: Optional[str] = None,
+        min_grade: Optional[str] = None,
+        capabilities: Optional[List[str]] = None,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> Tuple[List[dict], int]:
+        """Search the public trust registry for certified agents."""
+        from app.models.agent import Agent
+        from app.models.user import Organization
+
+        # Base query: only active, non-expired certificates
+        query = (
+            select(Certificate)
+            .join(Agent, Certificate.agent_id == Agent.id)
+            .join(Organization, Agent.organization_id == Organization.id)
+            .where(Certificate.status == CertificateStatus.ACTIVE)
+            .where(Certificate.expires_at > datetime.now(timezone.utc))
+            .options(joinedload(Certificate.agent))
+        )
+
+        # Apply filters
+        if agent_name:
+            query = query.where(Agent.name.ilike(f"%{agent_name}%"))
+
+        if organization_name:
+            query = query.where(Organization.name.ilike(f"%{organization_name}%"))
+
+        if min_grade:
+            grade_order = {"A": 1, "B": 2, "C": 3, "D": 4, "F": 5}
+            min_grade_order = grade_order.get(min_grade.upper(), 5)
+            # Filter grades that are >= min_grade (lower order number)
+            valid_grades = [g for g, o in grade_order.items() if o <= min_grade_order]
+            query = query.where(Certificate.grade.in_(valid_grades))
+
+        if capabilities:
+            # Filter by capabilities (must have at least one)
+            for cap in capabilities:
+                query = query.where(Certificate.certified_capabilities.contains([cap]))
+
+        # Get total count
+        count_query = select(func.count()).select_from(query.subquery())
+        total = await self.db.scalar(count_query) or 0
+
+        # Get paginated results
+        query = (
+            query.order_by(Certificate.overall_score.desc())
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        )
+        result = await self.db.execute(query)
+        certificates = list(result.scalars().all())
+
+        # Build response
+        entries = []
+        for cert in certificates:
+            if cert.agent:
+                entries.append({
+                    "agent_id": str(cert.agent_id),
+                    "agent_name": cert.agent.name,
+                    "organization_name": cert.agent.organization.name if cert.agent.organization else "Unknown",
+                    "certificate_id": str(cert.id),
+                    "grade": cert.grade,
+                    "overall_score": float(cert.overall_score),
+                    "safety_score": float(cert.safety_score) if cert.safety_score else None,
+                    "certified_capabilities": cert.certified_capabilities,
+                    "issued_at": cert.issued_at.isoformat(),
+                    "expires_at": cert.expires_at.isoformat(),
+                })
+
+        return entries, total
+
+    async def get_registry_stats(self) -> dict:
+        """Get statistics about the trust registry."""
+        # Total active certificates
+        active_count = await self.db.scalar(
+            select(func.count())
+            .where(Certificate.status == CertificateStatus.ACTIVE)
+            .where(Certificate.expires_at > datetime.now(timezone.utc))
+        ) or 0
+
+        # Grade distribution
+        grade_query = (
+            select(Certificate.grade, func.count())
+            .where(Certificate.status == CertificateStatus.ACTIVE)
+            .where(Certificate.expires_at > datetime.now(timezone.utc))
+            .group_by(Certificate.grade)
+        )
+        grade_result = await self.db.execute(grade_query)
+        grades_by_count = {row[0]: row[1] for row in grade_result}
+
+        # Average scores
+        avg_scores = await self.db.execute(
+            select(
+                func.avg(Certificate.overall_score),
+                func.avg(Certificate.safety_score),
+            )
+            .where(Certificate.status == CertificateStatus.ACTIVE)
+            .where(Certificate.expires_at > datetime.now(timezone.utc))
+        )
+        row = avg_scores.one()
+
+        return {
+            "total_active_certificates": active_count,
+            "grades": grades_by_count,
+            "avg_overall_score": float(row[0]) if row[0] else None,
+            "avg_safety_score": float(row[1]) if row[1] else None,
+        }
+
+    async def get_agent_public_profile(self, agent_id: uuid.UUID) -> Optional[dict]:
+        """Get public profile of a certified agent."""
+        from app.models.agent import Agent
+
+        # Get latest active certificate for this agent
+        result = await self.db.execute(
+            select(Certificate)
+            .where(Certificate.agent_id == agent_id)
+            .where(Certificate.status == CertificateStatus.ACTIVE)
+            .where(Certificate.expires_at > datetime.now(timezone.utc))
+            .options(joinedload(Certificate.agent))
+            .order_by(Certificate.issued_at.desc())
+            .limit(1)
+        )
+        certificate = result.scalar_one_or_none()
+
+        if not certificate or not certificate.agent:
+            return None
+
+        return {
+            "agent_id": str(agent_id),
+            "agent_name": certificate.agent.name,
+            "agent_type": certificate.agent.agent_type,
+            "framework": certificate.agent.framework,
+            "organization_name": (
+                certificate.agent.organization.name if certificate.agent.organization else "Unknown"
+            ),
+            "certificate": {
+                "id": str(certificate.id),
+                "grade": certificate.grade,
+                "overall_score": float(certificate.overall_score),
+                "safety_score": float(certificate.safety_score) if certificate.safety_score else None,
+                "certified_capabilities": certificate.certified_capabilities,
+                "issued_at": certificate.issued_at.isoformat(),
+                "expires_at": certificate.expires_at.isoformat(),
+            },
+        }
+
+    async def get_crl(self) -> dict:
+        """Get the Certificate Revocation List."""
+        # Get all revoked certificates
+        result = await self.db.execute(
+            select(Revocation)
+            .options(joinedload(Revocation.certificate))
+            .order_by(Revocation.revoked_at.desc())
+        )
+        revocations = result.scalars().all()
+
+        entries = []
+        for rev in revocations:
+            entries.append({
+                "certificate_id": str(rev.certificate_id),
+                "reason": rev.reason,
+                "revoked_at": rev.revoked_at.isoformat(),
+            })
+
+        return {
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "next_update": (datetime.now(timezone.utc) + timedelta(hours=24)).isoformat(),
+            "entries": entries,
+        }
+
+    async def get_certificate_chain(self, certificate_id: uuid.UUID) -> dict:
+        """Get the full certificate chain for verification."""
+        certificate = await self.get(certificate_id)
+        if not certificate:
+            return {"error": "Certificate not found"}
+
+        # Build chain (in a real system this would include intermediate CAs)
+        chain = {
+            "certificate": {
+                "id": str(certificate.id),
+                "agent_id": str(certificate.agent_id),
+                "agent_name": certificate.agent.name if certificate.agent else None,
+                "grade": certificate.grade,
+                "overall_score": float(certificate.overall_score),
+                "issued_at": certificate.issued_at.isoformat(),
+                "expires_at": certificate.expires_at.isoformat(),
+                "signature": certificate.signature,
+                "status": certificate.status.value,
+            },
+            "issuer": {
+                "name": "TrustModel Root CA",
+                "public_key": self.verifier.get_public_key_pem(),
+            },
+            "chain_valid": True,
+        }
+
+        # Verify signature
+        try:
+            signature_valid = await self.verifier.verify(
+                certificate.get_signable_data(),
+                certificate.signature,
+            )
+            chain["signature_valid"] = signature_valid
+        except Exception:
+            chain["signature_valid"] = False
+
+        return chain

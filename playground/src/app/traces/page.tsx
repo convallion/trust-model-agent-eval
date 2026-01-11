@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { formatDistanceToNow } from "date-fns";
+import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { api, type Trace } from "@/lib/api";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 
@@ -21,6 +22,7 @@ export default function TracesPage() {
   });
 
   return (
+    <DashboardLayout>
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold text-gray-900">Traces</h1>
@@ -150,5 +152,6 @@ export default function TracesPage() {
         </div>
       </div>
     </div>
+    </DashboardLayout>
   );
 }

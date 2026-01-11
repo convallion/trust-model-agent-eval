@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter
 
-from app.api.v1 import agents, certificates, evaluations, registry, sessions, traces
+from app.api.v1 import agents, certificates, chat, evaluations, registry, sessions, stats, terminal, trace_ingest, trace_stream, traces
 
 api_router = APIRouter()
 
@@ -12,3 +12,8 @@ api_router.include_router(evaluations.router, prefix="/evaluations", tags=["Eval
 api_router.include_router(certificates.router, prefix="/certificates", tags=["Certificates"])
 api_router.include_router(sessions.router, prefix="/sessions", tags=["Sessions"])
 api_router.include_router(registry.router, prefix="/registry", tags=["Registry"])
+api_router.include_router(chat.router, prefix="/chat", tags=["Chat"])
+api_router.include_router(stats.router, prefix="/stats", tags=["Stats"])
+api_router.include_router(terminal.router, prefix="/terminal", tags=["Terminal"])
+api_router.include_router(trace_ingest.router, prefix="/traces", tags=["Trace Ingestion"])
+api_router.include_router(trace_stream.router, prefix="/traces", tags=["Trace Stream"])

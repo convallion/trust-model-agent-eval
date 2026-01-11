@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useQuery } from "@tanstack/react-query";
 import clsx from "clsx";
 import {
   HomeIcon,
@@ -10,10 +11,17 @@ import {
   ShieldCheckIcon,
   DocumentTextIcon,
   Cog6ToothIcon,
+  ChatBubbleLeftRightIcon,
+  EyeIcon,
+  CommandLineIcon,
 } from "@heroicons/react/24/outline";
+import { api } from "@/lib/api";
 
 const navigation = [
   { name: "Dashboard", href: "/", icon: HomeIcon },
+  { name: "Playground", href: "/playground", icon: ChatBubbleLeftRightIcon },
+  { name: "Terminal", href: "/terminal", icon: CommandLineIcon },
+  { name: "Observability", href: "/observability", icon: EyeIcon },
   { name: "Agents", href: "/agents", icon: CpuChipIcon },
   { name: "Traces", href: "/traces", icon: DocumentTextIcon },
   { name: "Evaluations", href: "/evaluations", icon: ChartBarIcon },
@@ -23,6 +31,12 @@ const navigation = [
 
 export function Sidebar() {
   const pathname = usePathname();
+
+  const { data: stats } = useQuery({
+    queryKey: ["dashboard-stats"],
+    queryFn: () => api.getDashboardStats(),
+    staleTime: 30000, // Cache for 30 seconds
+  });
 
   return (
     <div className="hidden lg:flex lg:flex-shrink-0">
@@ -78,10 +92,17 @@ export function Sidebar() {
               <p className="text-sm font-medium opacity-90">
                 Organization Trust Score
               </p>
-              <p className="mt-1 text-3xl font-bold">87.5</p>
+              <p className="mt-1 text-3xl font-bold">
+                {stats?.avg_trust_score
+                  ? stats.avg_trust_score.toFixed(1)
+                  : "--"}
+              </p>
               <div className="mt-2 flex items-center gap-1 text-sm opacity-80">
                 <span className="inline-block w-2 h-2 bg-green-300 rounded-full" />
-                <span>5 agents certified</span>
+                <span>
+                  {stats?.active_certificates || 0} agent
+                  {stats?.active_certificates !== 1 ? "s" : ""} certified
+                </span>
               </div>
             </div>
           </div>

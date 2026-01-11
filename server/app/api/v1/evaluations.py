@@ -68,6 +68,8 @@ async def start_evaluation(
     # Create evaluation run
     eval_service = EvaluationService(db)
     evaluation = await eval_service.create(data)
+    await db.commit()  # Commit so background task can find it
+    await db.refresh(evaluation)
 
     # Queue background evaluation
     from app.config import settings
@@ -77,7 +79,7 @@ async def start_evaluation(
         settings.database_url,
     )
 
-    return await eval_service.to_response(evaluation)
+    return eval_service.to_response(evaluation)
 
 
 @router.get("", response_model=EvaluationListResponse)
@@ -120,7 +122,7 @@ async def list_evaluations(
         page_size=page_size,
     )
 
-    items = [await eval_service.to_response(e) for e in evaluations]
+    items = [eval_service.to_response(e) for e in evaluations]
 
     return EvaluationListResponse(
         items=items,
@@ -157,7 +159,7 @@ async def get_evaluation(
             detail="Not authorized to access this evaluation",
         )
 
-    return await eval_service.to_response(evaluation, include_details=True)
+    return eval_service.to_response(evaluation)
 
 
 @router.get("/{evaluation_id}/suites/{suite_name}", response_model=EvaluationSuiteResult)
@@ -232,4 +234,4 @@ async def cancel_evaluation(
         )
 
     evaluation = await eval_service.cancel(evaluation_id)
-    return await eval_service.to_response(evaluation)
+    return eval_service.to_response(evaluation)

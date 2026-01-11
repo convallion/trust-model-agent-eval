@@ -18,10 +18,12 @@ if TYPE_CHECKING:
 class SessionStatus(str, Enum):
     """Status of a TACP session."""
 
-    PENDING = "pending"  # Handshake in progress
-    ESTABLISHED = "established"  # Session active
+    pending = "pending"  # Handshake in progress
+    active = "active"  # Session active and communicating
+    ESTABLISHED = "established"  # Legacy: same as active
     COMPLETED = "completed"  # Clean termination
     FAILED = "failed"  # Handshake failed
+    REJECTED = "rejected"  # Session rejected by responder
     TIMEOUT = "timeout"  # Session timed out
     TERMINATED = "terminated"  # Force terminated
 
@@ -74,7 +76,7 @@ class TACPSession(Base, UUIDMixin, TimestampMixin):
     # Status
     status: Mapped[SessionStatus] = mapped_column(
         String(20),
-        default=SessionStatus.PENDING,
+        default=SessionStatus.pending,
         nullable=False,
         index=True,
     )
@@ -161,6 +163,8 @@ class TACPSession(Base, UUIDMixin, TimestampMixin):
             "type": event_type,
             "details": details,
         }
+        if self.audit_log is None:
+            self.audit_log = []
         self.audit_log = self.audit_log + [event]
 
 
@@ -190,3 +194,47 @@ class TACPSession(Base, UUIDMixin, TimestampMixin):
 # - message_received
 # - session_ended
 # - error_occurred
+
+
+class SessionMessage(Base, UUIDMixin, TimestampMixin):
+    """Message exchanged in a TACP session."""
+
+    __tablename__ = "session_messages"
+
+    session_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("tacp_sessions.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    sender_agent_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("agents.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    recipient_agent_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("agents.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+
+    message_type: Mapped[str] = mapped_column(
+        String(50),
+        nullable=False,
+        comment="Message type: task_request, task_response, status, error",
+    )
+
+    payload: Mapped[dict[str, Any]] = mapped_column(
+        JSONB,
+        default=dict,
+        nullable=False,
+    )
+
+    signature: Mapped[Optional[str]] = mapped_column(
+        Text,
+        nullable=True,
+        comment="Digital signature for message verification",
+    )

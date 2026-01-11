@@ -3,13 +3,16 @@
 import uuid
 from datetime import datetime
 from typing import List, Optional, Tuple
+from uuid import UUID
 
+from sqlalchemy import delete as sql_delete
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
 
+from app.models.agent import Agent
 from app.models.trace import Span, SpanType, Trace
-from app.schemas.trace import SpanCreate, TraceCreate, TraceResponse
+from app.schemas.trace import SpanCreate, SpanResponse, TraceBatchCreate, TraceCreate, TraceData, TraceResponse
 
 
 class TraceService:
@@ -17,6 +20,99 @@ class TraceService:
 
     def __init__(self, db: AsyncSession):
         self.db = db
+
+    async def list(
+        self,
+        organization_id: UUID,
+        agent_id: Optional[UUID] = None,
+        session_id: Optional[UUID] = None,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> Tuple[List[Trace], int]:
+        """List traces for an organization with optional filters."""
+        # Base query: join with agents to filter by organization
+        query = (
+            select(Trace)
+            .join(Agent, Trace.agent_id == Agent.id)
+            .where(Agent.organization_id == organization_id)
+        )
+
+        if agent_id:
+            query = query.where(Trace.agent_id == agent_id)
+
+        if session_id:
+            query = query.where(Trace.session_id == session_id)
+
+        # Get total count
+        count_query = select(func.count()).select_from(query.subquery())
+        total = await self.db.scalar(count_query) or 0
+
+        # Get paginated results
+        query = (
+            query.order_by(Trace.started_at.desc())
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        )
+        result = await self.db.execute(query)
+        traces = list(result.scalars().all())
+
+        return traces, total
+
+    async def ingest_batch(self, data: TraceBatchCreate) -> List[Trace]:
+        """Ingest a batch of traces."""
+        traces = []
+        for trace_data in data.traces:
+            trace_create = TraceCreate(
+                agent_id=data.agent_id,
+                trace_id=trace_data.trace_id,
+                session_id=trace_data.session_id,
+                task_description=trace_data.task_description,
+                started_at=trace_data.started_at,
+                ended_at=trace_data.ended_at,
+                spans=trace_data.spans,
+                metadata=trace_data.metadata,
+            )
+            trace = await self.create(trace_create)
+            traces.append(trace)
+        await self.db.commit()
+        return traces
+
+    async def get_spans(self, trace_id: UUID) -> List[Span]:
+        """Get all spans for a trace."""
+        result = await self.db.execute(
+            select(Span)
+            .where(Span.trace_id == trace_id)
+            .order_by(Span.started_at)
+        )
+        return list(result.scalars().all())
+
+    async def delete(self, trace_id: UUID) -> None:
+        """Delete a trace and its spans."""
+        # Delete spans first
+        await self.db.execute(
+            sql_delete(Span).where(Span.trace_id == trace_id)
+        )
+        # Delete trace
+        await self.db.execute(
+            sql_delete(Trace).where(Trace.id == trace_id)
+        )
+        await self.db.commit()
+
+    def span_to_response(self, span: Span) -> SpanResponse:
+        """Convert span model to response schema."""
+        return SpanResponse(
+            id=span.id,
+            trace_id=span.trace_id,
+            parent_span_id=span.parent_span_id,
+            span_type=span.span_type,
+            name=span.name,
+            started_at=span.started_at,
+            ended_at=span.ended_at,
+            status=span.status,
+            error_message=span.error_message,
+            attributes=span.attributes,
+            duration_ms=span.duration_ms,
+        )
 
     async def create(self, data: TraceCreate) -> Trace:
         """Create a new trace with spans."""
@@ -182,7 +278,7 @@ class TraceService:
             "decision_count": decisions,
         }
 
-    def to_response(self, trace: Trace, include_spans: bool = False) -> TraceResponse:
+    async def to_response(self, trace: Trace, include_spans: bool = False) -> TraceResponse:
         """Convert trace model to response schema."""
         data = {
             "id": trace.id,
@@ -199,7 +295,9 @@ class TraceService:
             "created_at": trace.created_at,
         }
 
-        if include_spans and trace.spans:
+        if include_spans:
+            # Load spans if not already loaded
+            spans = await self.get_spans(trace.id) if not trace.spans else trace.spans
             data["spans"] = [
                 {
                     "id": span.id,
@@ -214,7 +312,7 @@ class TraceService:
                     "attributes": span.attributes,
                     "duration_ms": span.duration_ms,
                 }
-                for span in trace.spans
+                for span in spans
             ]
 
         return TraceResponse(**data)

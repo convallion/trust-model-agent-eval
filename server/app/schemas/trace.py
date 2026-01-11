@@ -54,10 +54,23 @@ class TraceCreate(BaseModel):
     spans: List[SpanCreate] = Field(default_factory=list)
 
 
+class TraceData(BaseModel):
+    """Single trace data for batch ingestion."""
+
+    trace_id: Optional[UUID] = Field(default=None, description="External trace ID")
+    session_id: Optional[str] = None
+    task_description: Optional[str] = None
+    started_at: datetime
+    ended_at: Optional[datetime] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    spans: List[SpanCreate] = Field(default_factory=list)
+
+
 class TraceBatchCreate(BaseModel):
     """Schema for batch trace ingestion."""
 
-    traces: List[TraceCreate]
+    agent_id: UUID
+    traces: List[TraceData]
 
 
 class TraceResponse(BaseModel):
@@ -85,7 +98,7 @@ class TraceResponse(BaseModel):
 class TraceBatchResponse(BaseModel):
     """Response for batch trace ingestion."""
 
-    created: int
+    accepted: int
     trace_ids: List[UUID]
 
 

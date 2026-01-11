@@ -28,17 +28,21 @@ export function TrustScoreChart({ evaluations }: TrustScoreChartProps) {
       capability: e.scores?.capability || 0,
     }));
 
-  // Add sample data if no evaluations
-  const data =
-    chartData.length > 0
-      ? chartData
-      : [
-          { name: "Week 1", overall: 75, safety: 80, capability: 70 },
-          { name: "Week 2", overall: 78, safety: 82, capability: 74 },
-          { name: "Week 3", overall: 82, safety: 85, capability: 78 },
-          { name: "Week 4", overall: 85, safety: 88, capability: 82 },
-          { name: "Week 5", overall: 87, safety: 90, capability: 84 },
-        ];
+  // Use real data only
+  const data = chartData;
+
+  if (data.length === 0) {
+    return (
+      <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+        <h2 className="text-lg font-semibold text-gray-900 mb-4">
+          Trust Score Trend
+        </h2>
+        <div className="h-64 flex items-center justify-center text-gray-400">
+          <p>No evaluation data yet. Run an evaluation to see trends.</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">

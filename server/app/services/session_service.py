@@ -2,19 +2,24 @@
 
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
+from fastapi import WebSocket
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
 
+from app.models.agent import Agent
 from app.models.certificate import Certificate, CertificateStatus
-from app.models.session import SessionStatus, TACPSession
-from app.schemas.session import SessionConstraints, SessionCreate, SessionResponse
+from app.models.session import SessionMessage, SessionStatus, TACPSession
+from app.schemas.session import MessageEnvelope, SessionConstraints, SessionCreate, SessionResponse
 
 
 class SessionService:
     """Service for TACP session management."""
+
+    # Class-level storage for WebSocket connections (shared across instances)
+    _websocket_connections: Dict[uuid.UUID, Set[WebSocket]] = {}
 
     def __init__(self, db: AsyncSession):
         self.db = db
@@ -30,7 +35,7 @@ class SessionService:
             responder_agent_id=data.responder_agent_id,
             initiator_certificate_id=initiator_cert.id if initiator_cert else None,
             responder_certificate_id=responder_cert.id if responder_cert else None,
-            status=SessionStatus.PENDING,
+            status=SessionStatus.pending,
             purpose=data.purpose,
             constraints=data.constraints.model_dump(),
             initiator_capabilities=data.requested_capabilities,
@@ -73,10 +78,10 @@ class SessionService:
         if not session:
             return None
 
-        if session.status != SessionStatus.PENDING:
+        if session.status != SessionStatus.pending:
             return None
 
-        session.status = SessionStatus.ESTABLISHED
+        session.status = SessionStatus.active
         session.established_at = datetime.now(timezone.utc)
         session.responder_capabilities = responder_capabilities
         session.agreed_capabilities = agreed_capabilities
@@ -103,7 +108,7 @@ class SessionService:
         if not session:
             return None
 
-        if session.status == SessionStatus.COMPLETED:
+        if session.status.value == "completed":
             return session
 
         session.status = SessionStatus.COMPLETED
@@ -129,7 +134,7 @@ class SessionService:
         session.ended_at = datetime.now(timezone.utc)
         session.end_reason = reason
 
-        session.add_audit_event("error_occurred", {"reason": reason})
+        session.add_audit_event("session_failed", {"reason": reason})
 
         await self.db.flush()
         return session
@@ -198,9 +203,11 @@ class SessionService:
         )
         return result.scalar_one_or_none()
 
-    def to_response(self, session: TACPSession) -> SessionResponse:
+    async def to_response(
+        self, session: TACPSession, include_messages: bool = False
+    ) -> SessionResponse:
         """Convert session model to response schema."""
-        return SessionResponse(
+        response = SessionResponse(
             id=session.id,
             initiator_agent_id=session.initiator_agent_id,
             initiator_agent_name=(
@@ -215,10 +222,10 @@ class SessionService:
             status=session.status,
             purpose=session.purpose,
             scope=session.scope,
-            constraints=session.constraints,
-            initiator_capabilities=session.initiator_capabilities,
-            responder_capabilities=session.responder_capabilities,
-            agreed_capabilities=session.agreed_capabilities,
+            constraints=session.constraints or {},
+            initiator_capabilities=session.initiator_capabilities or [],
+            responder_capabilities=session.responder_capabilities or [],
+            agreed_capabilities=session.agreed_capabilities or [],
             created_at=session.created_at,
             established_at=session.established_at,
             ended_at=session.ended_at,
@@ -227,3 +234,154 @@ class SessionService:
             task_count=session.task_count,
             end_reason=session.end_reason,
         )
+        return response
+
+    async def list(
+        self,
+        organization_id: uuid.UUID,
+        agent_id: Optional[uuid.UUID] = None,
+        status: Optional[SessionStatus] = None,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> Tuple[List[TACPSession], int]:
+        """List sessions for an organization."""
+        # Build query to filter by organization's agents
+        from app.models.agent import Agent
+
+        # Get agent IDs for this organization
+        agent_subquery = select(Agent.id).where(Agent.organization_id == organization_id)
+
+        query = select(TACPSession).where(
+            or_(
+                TACPSession.initiator_agent_id.in_(agent_subquery),
+                TACPSession.responder_agent_id.in_(agent_subquery),
+            )
+        )
+
+        if agent_id:
+            query = query.where(
+                or_(
+                    TACPSession.initiator_agent_id == agent_id,
+                    TACPSession.responder_agent_id == agent_id,
+                )
+            )
+
+        if status:
+            query = query.where(TACPSession.status == status)
+
+        # Get total count
+        count_query = select(func.count()).select_from(query.subquery())
+        total = await self.db.scalar(count_query) or 0
+
+        # Get paginated results
+        query = (
+            query.options(
+                joinedload(TACPSession.initiator_agent),
+                joinedload(TACPSession.responder_agent),
+            )
+            .order_by(TACPSession.created_at.desc())
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        )
+        result = await self.db.execute(query)
+        sessions = list(result.scalars().unique().all())
+
+        return sessions, total
+
+    async def accept(self, session_id: uuid.UUID) -> TACPSession:
+        """Accept a pending session."""
+        session = await self.get(session_id)
+        if not session:
+            raise ValueError("Session not found")
+
+        session.status = SessionStatus.active
+        session.established_at = datetime.now(timezone.utc)
+        session.add_audit_event("session_accepted", {})
+
+        await self.db.flush()
+        return session
+
+    async def reject(self, session_id: uuid.UUID, reason: str = "rejected") -> TACPSession:
+        """Reject a pending session."""
+        session = await self.get(session_id)
+        if not session:
+            raise ValueError("Session not found")
+
+        session.status = SessionStatus.REJECTED
+        session.ended_at = datetime.now(timezone.utc)
+        session.end_reason = reason
+        session.add_audit_event("session_rejected", {"reason": reason})
+
+        await self.db.flush()
+        return session
+
+    async def send_message(
+        self, session_id: uuid.UUID, message: MessageEnvelope
+    ) -> MessageEnvelope:
+        """Store a message and broadcast to connected WebSockets."""
+        session = await self.get(session_id)
+        if not session:
+            raise ValueError("Session not found")
+
+        # Generate message ID and timestamp if not provided
+        if not message.message_id:
+            message.message_id = uuid.uuid4()
+        if not message.timestamp:
+            message.timestamp = datetime.now(timezone.utc)
+
+        # Store message in database
+        db_message = SessionMessage(
+            id=message.message_id,
+            session_id=session_id,
+            sender_agent_id=message.sender_id,
+            recipient_agent_id=message.recipient_id,
+            message_type=message.message_type,
+            payload=message.payload,
+            signature=message.signature,
+        )
+        self.db.add(db_message)
+
+        # Increment message count
+        session.message_count += 1
+        if message.message_type == "task_request":
+            session.task_count += 1
+
+        await self.db.flush()
+
+        # Broadcast to connected WebSockets
+        await self._broadcast_to_session(session_id, message)
+
+        return message
+
+    async def register_websocket(self, session_id: uuid.UUID, websocket: WebSocket) -> None:
+        """Register a WebSocket connection for a session."""
+        if session_id not in self._websocket_connections:
+            self._websocket_connections[session_id] = set()
+        self._websocket_connections[session_id].add(websocket)
+
+    async def unregister_websocket(self, session_id: uuid.UUID, websocket: WebSocket) -> None:
+        """Unregister a WebSocket connection from a session."""
+        if session_id in self._websocket_connections:
+            self._websocket_connections[session_id].discard(websocket)
+            if not self._websocket_connections[session_id]:
+                del self._websocket_connections[session_id]
+
+    async def _broadcast_to_session(
+        self, session_id: uuid.UUID, message: MessageEnvelope
+    ) -> None:
+        """Broadcast a message to all WebSocket connections for a session."""
+        if session_id not in self._websocket_connections:
+            return
+
+        disconnected = []
+        message_data = message.model_dump(mode="json")
+
+        for ws in self._websocket_connections[session_id].copy():
+            try:
+                await ws.send_json(message_data)
+            except Exception:
+                disconnected.append(ws)
+
+        # Clean up disconnected WebSockets
+        for ws in disconnected:
+            self._websocket_connections[session_id].discard(ws)

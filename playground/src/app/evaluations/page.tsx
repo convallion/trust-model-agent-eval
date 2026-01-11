@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 import { formatDistanceToNow } from "date-fns";
+import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { api } from "@/lib/api";
 import { GradeBadge } from "@/components/ui/GradeBadge";
 import { StatusBadge } from "@/components/ui/StatusBadge";
@@ -14,6 +15,7 @@ export default function EvaluationsPage() {
   });
 
   return (
+    <DashboardLayout>
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold text-gray-900">Evaluations</h1>
@@ -124,5 +126,6 @@ export default function EvaluationsPage() {
         </div>
       </div>
     </div>
+    </DashboardLayout>
   );
 }

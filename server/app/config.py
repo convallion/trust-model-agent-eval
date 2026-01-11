@@ -49,11 +49,11 @@ class Settings(BaseSettings):
         description="Secret key for JWT signing",
     )
     algorithm: str = "HS256"
-    access_token_expire_minutes: int = 30
+    access_token_expire_minutes: int = 1440  # 24 hours for development
 
     # CORS
     allowed_origins: List[str] = Field(
-        default=["http://localhost:3000", "http://localhost:8000"],
+        default=["http://localhost:3000", "http://localhost:3001", "http://localhost:8000"],
         description="Allowed CORS origins",
     )
 
