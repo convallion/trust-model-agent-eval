@@ -1,12 +1,23 @@
 """Capability evaluation suite - tests what the agent can do."""
 
-from typing import Any, Callable, Dict, List, Optional
-from uuid import UUID
+from typing import Any, Callable, Dict, Optional
 
 import structlog
 
-from app.evaluation.executor import TaskExecutor
+from app.evaluation.agent_executor import BaseAgentExecutor, ExecutionResult
+from app.evaluation.graders import (
+    GradingContext,
+    OpenRouterClient,
+    ReasoningQualityGrader,
+    TaskCompletionGrader,
+    ToolProficiencyGrader,
+    EfficiencyGrader,
+    get_openrouter_client,
+)
+from app.evaluation.metrics import TraceAnalyzer, get_trace_analyzer
+from app.evaluation.scoring import CapabilityScorer, TestResult
 from app.evaluation.suites.base import EvaluationSuite
+from app.evaluation.tasks import get_capability_tasks, TaskDefinition
 
 logger = structlog.get_logger()
 
@@ -32,6 +43,32 @@ class CapabilitySuite(EvaluationSuite):
         "reasoning_quality": 0.25,
         "efficiency": 0.15,
     }
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._openrouter_client: Optional[OpenRouterClient] = None
+        self._graders: Dict[str, Any] = {}
+        self._task_bank = get_capability_tasks()
+        self._trace_analyzer = get_trace_analyzer()
+        self._scorer = CapabilityScorer(weights=self.WEIGHTS)
+
+    async def _get_openrouter_client(self) -> OpenRouterClient:
+        """Get or create OpenRouter client."""
+        if self._openrouter_client is None:
+            self._openrouter_client = await get_openrouter_client()
+        return self._openrouter_client
+
+    async def _get_graders(self) -> Dict[str, Any]:
+        """Initialize graders lazily."""
+        if not self._graders:
+            client = await self._get_openrouter_client()
+            self._graders = {
+                "task_completion": TaskCompletionGrader(client=client),
+                "tool_proficiency": ToolProficiencyGrader(client=client),
+                "reasoning_quality": ReasoningQualityGrader(client=client),
+                "efficiency": EfficiencyGrader(client=client),
+            }
+        return self._graders
 
     async def run(
         self,
@@ -97,25 +134,61 @@ class CapabilitySuite(EvaluationSuite):
         """
         Test task completion capability.
 
-        Runs a set of tasks and measures completion rate.
+        Runs a set of tasks and measures completion rate using LLM grading.
         """
-        # TODO: Load tasks from task bank and execute against agent
-        # For now, return simulated results
+        graders = await self._get_graders()
+        task_grader = graders["task_completion"]
 
-        # Simulated test execution
-        passed = 45
-        failed = 5
-        total = passed + failed
+        # Get task completion tasks
+        tasks = self._task_bank.get_by_tag("coding")
+        if not tasks:
+            # Fallback to all tasks if no specific tag
+            tasks = self._task_bank.sample(10, category="task_completion")
+
+        test_results: list[TestResult] = []
+
+        for task in tasks[:10]:  # Limit to 10 tasks
+            # Execute task against agent
+            execution_result = await self._execute_task(task)
+
+            if execution_result.success:
+                # Grade the response
+                context = GradingContext(
+                    task_id=task.id,
+                    task_prompt=task.prompt,
+                    agent_response=execution_result.response,
+                    expected_outcome=task.expected_outcome.to_dict(),
+                    agent_trace=execution_result.trace_data,
+                )
+
+                grade_result = await task_grader.grade(context)
+
+                test_results.append(TestResult(
+                    test_id=task.id,
+                    test_name=task.name,
+                    passed=grade_result.passed,
+                    score=grade_result.score,
+                    grade_result=grade_result,
+                ))
+            else:
+                test_results.append(TestResult(
+                    test_id=task.id,
+                    test_name=task.name,
+                    passed=False,
+                    score=0,
+                    error=execution_result.error,
+                ))
+
+        # Calculate results
+        passed = sum(1 for r in test_results if r.passed)
+        failed = len(test_results) - passed
+        avg_score = sum(r.score for r in test_results) / len(test_results) if test_results else 0
 
         return {
-            "score": round((passed / total) * 100, 2) if total > 0 else 0,
+            "score": round(avg_score, 2),
             "passed": passed,
             "failed": failed,
-            "details": [
-                {"task": "simple_task_1", "passed": True},
-                {"task": "complex_task_1", "passed": True},
-                {"task": "edge_case_1", "passed": False},
-            ],
+            "details": [r.to_dict() for r in test_results],
         }
 
     async def _test_tool_proficiency(self) -> Dict[str, Any]:
@@ -124,20 +197,57 @@ class CapabilitySuite(EvaluationSuite):
 
         Measures correct tool selection, parameter accuracy, and error handling.
         """
-        # TODO: Analyze agent traces for tool usage patterns
+        graders = await self._get_graders()
+        tool_grader = graders["tool_proficiency"]
 
-        correct_selections = 48
-        total_selections = 50
+        # Get tasks that require tool usage
+        tasks = self._task_bank.get_by_tag("tool_usage")
+        if not tasks:
+            tasks = self._task_bank.sample(5)
+
+        test_results: list[TestResult] = []
+
+        for task in tasks[:5]:
+            execution_result = await self._execute_task(task)
+
+            if execution_result.success and execution_result.trace_data:
+                context = GradingContext(
+                    task_id=task.id,
+                    task_prompt=task.prompt,
+                    agent_response=execution_result.response,
+                    agent_trace=execution_result.trace_data,
+                    additional_context={
+                        "available_tools": task.metadata.get("available_tools", []),
+                    },
+                )
+
+                grade_result = await tool_grader.grade(context)
+
+                test_results.append(TestResult(
+                    test_id=task.id,
+                    test_name=task.name,
+                    passed=grade_result.passed,
+                    score=grade_result.score,
+                    grade_result=grade_result,
+                ))
+            else:
+                # Without trace data, use default scoring
+                test_results.append(TestResult(
+                    test_id=task.id,
+                    test_name=task.name,
+                    passed=execution_result.success,
+                    score=70 if execution_result.success else 0,
+                ))
+
+        passed = sum(1 for r in test_results if r.passed)
+        failed = len(test_results) - passed
+        avg_score = sum(r.score for r in test_results) / len(test_results) if test_results else 0
 
         return {
-            "score": round((correct_selections / total_selections) * 100, 2),
-            "passed": correct_selections,
-            "failed": total_selections - correct_selections,
-            "details": {
-                "correct_tool_selection": 0.96,
-                "parameter_accuracy": 0.94,
-                "error_handling": 0.88,
-            },
+            "score": round(avg_score, 2),
+            "passed": passed,
+            "failed": failed,
+            "details": [r.to_dict() for r in test_results],
         }
 
     async def _test_reasoning_quality(self) -> Dict[str, Any]:
@@ -146,18 +256,54 @@ class CapabilitySuite(EvaluationSuite):
 
         Uses LLM-as-judge to evaluate decision quality.
         """
-        # TODO: Use model-as-judge grader to evaluate reasoning
+        graders = await self._get_graders()
+        reasoning_grader = graders["reasoning_quality"]
+
+        # Get reasoning-focused tasks
+        tasks = self._task_bank.get_by_tag("reasoning")
+        if not tasks:
+            tasks = self._task_bank.sample(5, category="reasoning")
+
+        test_results: list[TestResult] = []
+
+        for task in tasks[:5]:
+            execution_result = await self._execute_task(task)
+
+            if execution_result.success:
+                context = GradingContext(
+                    task_id=task.id,
+                    task_prompt=task.prompt,
+                    agent_response=execution_result.response,
+                    expected_outcome=task.expected_outcome.to_dict(),
+                )
+
+                grade_result = await reasoning_grader.grade(context)
+
+                test_results.append(TestResult(
+                    test_id=task.id,
+                    test_name=task.name,
+                    passed=grade_result.passed,
+                    score=grade_result.score,
+                    grade_result=grade_result,
+                ))
+            else:
+                test_results.append(TestResult(
+                    test_id=task.id,
+                    test_name=task.name,
+                    passed=False,
+                    score=0,
+                    error=execution_result.error,
+                ))
+
+        passed = sum(1 for r in test_results if r.passed)
+        failed = len(test_results) - passed
+        avg_score = sum(r.score for r in test_results) / len(test_results) if test_results else 0
 
         return {
-            "score": 88.5,
-            "passed": 44,
-            "failed": 6,
-            "details": {
-                "problem_identification": 0.92,
-                "logical_approach": 0.88,
-                "alternatives_considered": 0.85,
-                "solution_appropriateness": 0.89,
-            },
+            "score": round(avg_score, 2),
+            "passed": passed,
+            "failed": failed,
+            "details": [r.to_dict() for r in test_results],
         }
 
     async def _test_efficiency(self) -> Dict[str, Any]:
@@ -166,24 +312,91 @@ class CapabilitySuite(EvaluationSuite):
 
         Measures tokens, time, and tool calls per task.
         """
-        # TODO: Analyze traces for efficiency metrics
+        graders = await self._get_graders()
+        efficiency_grader = graders["efficiency"]
 
-        metrics = {
-            "avg_tokens_per_task": 4500,
-            "avg_time_per_task_ms": 8500,
-            "avg_tool_calls_per_task": 12,
-        }
+        # Run a few tasks and analyze their traces
+        tasks = self._task_bank.sample(5)
+        test_results: list[TestResult] = []
+        all_metrics = []
 
-        # Score based on thresholds
-        token_score = 100 if metrics["avg_tokens_per_task"] < 5000 else 80
-        time_score = 100 if metrics["avg_time_per_task_ms"] < 10000 else 75
-        tool_score = 100 if metrics["avg_tool_calls_per_task"] < 15 else 85
+        for task in tasks:
+            execution_result = await self._execute_task(task)
 
-        overall = (token_score + time_score + tool_score) / 3
+            if execution_result.success and execution_result.trace_data:
+                # Analyze trace for efficiency metrics
+                trace_metrics = self._trace_analyzer.analyze_trace(execution_result.trace_data)
+                all_metrics.append(trace_metrics)
+
+                context = GradingContext(
+                    task_id=task.id,
+                    task_prompt=task.prompt,
+                    agent_response=execution_result.response,
+                    agent_trace=execution_result.trace_data,
+                )
+
+                grade_result = await efficiency_grader.grade(context)
+
+                test_results.append(TestResult(
+                    test_id=task.id,
+                    test_name=task.name,
+                    passed=grade_result.passed,
+                    score=grade_result.score,
+                    grade_result=grade_result,
+                    trace_metrics=trace_metrics,
+                ))
+            else:
+                # Calculate efficiency from execution result directly
+                efficiency_score = 70 if execution_result.duration_ms < 30000 else 50
+                test_results.append(TestResult(
+                    test_id=task.id,
+                    test_name=task.name,
+                    passed=efficiency_score >= 70,
+                    score=efficiency_score,
+                ))
+
+        passed = sum(1 for r in test_results if r.passed)
+        failed = len(test_results) - passed
+        avg_score = sum(r.score for r in test_results) / len(test_results) if test_results else 0
+
+        # Aggregate efficiency metrics
+        avg_metrics = {}
+        if all_metrics:
+            avg_metrics = {
+                "avg_tokens_per_task": sum(m.total_tokens for m in all_metrics) / len(all_metrics),
+                "avg_time_per_task_ms": sum(m.total_duration_ms for m in all_metrics) / len(all_metrics),
+                "avg_tool_calls_per_task": sum(m.total_tool_calls for m in all_metrics) / len(all_metrics),
+            }
 
         return {
-            "score": round(overall, 2),
-            "passed": 1,
-            "failed": 0,
-            "details": metrics,
+            "score": round(avg_score, 2),
+            "passed": passed,
+            "failed": failed,
+            "details": [r.to_dict() for r in test_results],
+            "aggregate_metrics": avg_metrics,
         }
+
+    async def _execute_task(self, task: TaskDefinition) -> ExecutionResult:
+        """Execute a task against the agent."""
+        # Use the executor from the base class
+        return await self.executor.execute_task(
+            task.id,
+            lambda: self._run_agent_task(task),
+        )
+
+    async def _run_agent_task(self, task: TaskDefinition) -> ExecutionResult:
+        """
+        Run a task against the agent.
+
+        This method should be overridden or configured to use the actual
+        agent executor (LangSmith, HTTP, etc.)
+        """
+        from app.evaluation.agent_executor import MockAgentExecutor
+
+        # Default to mock executor if no real executor configured
+        executor = getattr(self, "_agent_executor", None)
+        if executor is None:
+            executor = MockAgentExecutor(self.agent_id)
+            self._agent_executor = executor
+
+        return await executor.execute(task)

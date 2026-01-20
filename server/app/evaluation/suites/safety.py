@@ -1,12 +1,23 @@
 """Safety evaluation suite - tests if the agent is safe to deploy."""
 
-from typing import Any, Callable, Dict, List, Optional
-from uuid import UUID
+from typing import Any, Callable, Dict, Optional
 
 import structlog
 
-from app.evaluation.executor import TaskExecutor
+from app.evaluation.agent_executor import ExecutionResult
+from app.evaluation.graders import (
+    BoundaryAdherenceGrader,
+    DataProtectionGrader,
+    GradingContext,
+    HarmfulActionGrader,
+    JailbreakDetectionGrader,
+    OpenRouterClient,
+    QuickSafetyGrader,
+    get_openrouter_client,
+)
+from app.evaluation.scoring import SafetyScorer, TestResult
 from app.evaluation.suites.base import EvaluationSuite
+from app.evaluation.tasks import get_safety_tasks, TaskDefinition
 
 logger = structlog.get_logger()
 
@@ -32,6 +43,32 @@ class SafetySuite(EvaluationSuite):
         "data_protection": 0.20,
         "harmful_action_blocking": 0.15,
     }
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._openrouter_client: Optional[OpenRouterClient] = None
+        self._graders: Dict[str, Any] = {}
+        self._task_bank = get_safety_tasks()
+        self._scorer = SafetyScorer(weights=self.WEIGHTS)
+        self._quick_grader = QuickSafetyGrader()
+
+    async def _get_openrouter_client(self) -> OpenRouterClient:
+        """Get or create OpenRouter client."""
+        if self._openrouter_client is None:
+            self._openrouter_client = await get_openrouter_client()
+        return self._openrouter_client
+
+    async def _get_graders(self) -> Dict[str, Any]:
+        """Initialize graders lazily."""
+        if not self._graders:
+            client = await self._get_openrouter_client()
+            self._graders = {
+                "jailbreak": JailbreakDetectionGrader(client=client),
+                "boundary": BoundaryAdherenceGrader(client=client),
+                "data_protection": DataProtectionGrader(client=client),
+                "harmful_action": HarmfulActionGrader(client=client),
+            }
+        return self._graders
 
     async def run(
         self,
@@ -103,25 +140,88 @@ class SafetySuite(EvaluationSuite):
         - Multi-turn manipulation
         - Encoding attacks
         """
-        # TODO: Load jailbreak prompts from bank and test agent
-        # For now, simulated results
+        graders = await self._get_graders()
+        jailbreak_grader = graders["jailbreak"]
 
-        prompts_tested = 10000
-        blocked = 9980
-        passed = prompts_tested - blocked
+        # Get jailbreak tasks
+        tasks = self._task_bank.get_by_tag("jailbreak")
+        if not tasks:
+            tasks = self._task_bank.sample(15, category="jailbreaks")
+
+        test_results: list[TestResult] = []
+        attack_type_results: Dict[str, list[TestResult]] = {}
+
+        for task in tasks:
+            execution_result = await self._execute_task(task)
+
+            # First do quick safety check
+            quick_context = GradingContext(
+                task_id=task.id,
+                task_prompt=task.prompt,
+                agent_response=execution_result.response,
+            )
+            quick_result = await self._quick_grader.grade(quick_context)
+
+            # If quick check is conclusive, use it
+            if quick_result.score == 100:  # Safe refusal detected
+                passed = True
+                score = 100.0
+                grade_result = quick_result
+            elif quick_result.score == 0:  # Unsafe content detected
+                passed = False
+                score = 0.0
+                grade_result = quick_result
+            else:
+                # Need LLM evaluation
+                context = GradingContext(
+                    task_id=task.id,
+                    task_prompt=task.prompt,
+                    agent_response=execution_result.response,
+                    additional_context={
+                        "attack_type": task.metadata.get("attack_type", "unknown"),
+                    },
+                )
+                grade_result = await jailbreak_grader.grade(context)
+                passed = grade_result.passed
+                score = grade_result.score
+
+            test_result = TestResult(
+                test_id=task.id,
+                test_name=task.name,
+                passed=passed,
+                score=score,
+                grade_result=grade_result,
+                details={"attack_type": task.metadata.get("attack_type", "unknown")},
+            )
+            test_results.append(test_result)
+
+            # Group by attack type
+            attack_type = task.metadata.get("attack_type", "unknown")
+            if attack_type not in attack_type_results:
+                attack_type_results[attack_type] = []
+            attack_type_results[attack_type].append(test_result)
+
+        # Calculate results using SafetyScorer
+        category_result = self._scorer.score_jailbreak_tests(test_results)
+
+        # Build detailed breakdown by attack type
+        attack_breakdown = {}
+        for attack_type, results in attack_type_results.items():
+            blocked = sum(1 for r in results if r.passed)
+            attack_breakdown[attack_type] = {
+                "tested": len(results),
+                "blocked": blocked,
+                "failed": len(results) - blocked,
+            }
 
         return {
-            "score": round((blocked / prompts_tested) * 100, 2),
-            "passed": blocked,  # Successfully blocked
-            "failed": passed,  # Failed to block
-            "prompts_tested": prompts_tested,
-            "pass_rate": blocked / prompts_tested,
-            "details": {
-                "direct_injection": {"tested": 3000, "blocked": 2995},
-                "indirect_injection": {"tested": 3000, "blocked": 2990},
-                "multi_turn_manipulation": {"tested": 2000, "blocked": 1995},
-                "encoding_attacks": {"tested": 2000, "blocked": 2000},
-            },
+            "score": category_result.score,
+            "passed": category_result.tests_passed,
+            "failed": category_result.tests_failed,
+            "prompts_tested": category_result.tests_total,
+            "pass_rate": category_result.pass_rate,
+            "details": attack_breakdown,
+            "critical_failures": category_result.details.get("critical_failures", []),
         }
 
     async def _test_boundary_adherence(self) -> Dict[str, Any]:
@@ -133,20 +233,64 @@ class SafetySuite(EvaluationSuite):
         - Scope creep resistance
         - Role adherence
         """
-        # TODO: Test with out-of-scope scenarios
+        graders = await self._get_graders()
+        boundary_grader = graders["boundary"]
 
-        scenarios_tested = 500
-        properly_handled = 495
+        # Get boundary tasks
+        tasks = self._task_bank.get_by_tag("boundaries")
+        if not tasks:
+            tasks = self._task_bank.sample(10, category="boundaries")
+
+        test_results: list[TestResult] = []
+        boundary_type_results: Dict[str, list[TestResult]] = {}
+
+        for task in tasks:
+            execution_result = await self._execute_task(task)
+
+            context = GradingContext(
+                task_id=task.id,
+                task_prompt=task.prompt,
+                agent_response=execution_result.response,
+                additional_context={
+                    "boundaries": task.metadata.get("boundaries", {}),
+                    "boundary_type": task.metadata.get("boundary_type", "unknown"),
+                },
+            )
+
+            grade_result = await boundary_grader.grade(context)
+
+            test_result = TestResult(
+                test_id=task.id,
+                test_name=task.name,
+                passed=grade_result.passed,
+                score=grade_result.score,
+                grade_result=grade_result,
+            )
+            test_results.append(test_result)
+
+            # Group by boundary type
+            boundary_type = task.metadata.get("boundary_type", "unknown")
+            if boundary_type not in boundary_type_results:
+                boundary_type_results[boundary_type] = []
+            boundary_type_results[boundary_type].append(test_result)
+
+        # Calculate results
+        category_result = self._scorer.score_tests(test_results, "boundary_adherence")
+
+        # Build breakdown
+        boundary_breakdown = {}
+        for boundary_type, results in boundary_type_results.items():
+            handled = sum(1 for r in results if r.passed)
+            boundary_breakdown[boundary_type] = {
+                "tested": len(results),
+                "handled": handled,
+            }
 
         return {
-            "score": round((properly_handled / scenarios_tested) * 100, 2),
-            "passed": properly_handled,
-            "failed": scenarios_tested - properly_handled,
-            "details": {
-                "out_of_scope_requests": {"tested": 200, "handled": 198},
-                "scope_creep_attempts": {"tested": 150, "resisted": 148},
-                "role_violations": {"tested": 150, "prevented": 149},
-            },
+            "score": category_result.score,
+            "passed": category_result.tests_passed,
+            "failed": category_result.tests_failed,
+            "details": boundary_breakdown,
         }
 
     async def _test_data_protection(self) -> Dict[str, Any]:
@@ -158,20 +302,69 @@ class SafetySuite(EvaluationSuite):
         - PII handling
         - Cross-session leakage prevention
         """
-        # TODO: Test data protection scenarios
+        graders = await self._get_graders()
+        data_grader = graders["data_protection"]
 
-        tests_run = 200
-        passed = 200  # All passed
+        # Get data protection tasks
+        tasks = self._task_bank.get_by_tag("privacy") + self._task_bank.get_by_tag("data")
+        if not tasks:
+            tasks = self._task_bank.sample(5)
+
+        test_results: list[TestResult] = []
+
+        for task in tasks[:10]:
+            execution_result = await self._execute_task(task)
+
+            context = GradingContext(
+                task_id=task.id,
+                task_prompt=task.prompt,
+                agent_response=execution_result.response,
+                additional_context={
+                    "scenario": task.metadata.get("scenario", "General data protection"),
+                    "protected_data": task.metadata.get("protected_data", []),
+                },
+            )
+
+            grade_result = await data_grader.grade(context)
+
+            test_results.append(TestResult(
+                test_id=task.id,
+                test_name=task.name,
+                passed=grade_result.passed,
+                score=grade_result.score,
+                grade_result=grade_result,
+            ))
+
+        # Calculate results
+        passed = sum(1 for r in test_results if r.passed)
+        avg_score = sum(r.score for r in test_results) / len(test_results) if test_results else 0
+
+        # Build detailed breakdown
+        details = {
+            "system_prompt_extraction": {"tested": 0, "protected": 0},
+            "pii_handling": {"tested": 0, "correct": 0},
+            "cross_session_leakage": {"tested": 0, "prevented": 0},
+        }
+
+        for result in test_results:
+            if "prompt_extraction" in result.test_id:
+                details["system_prompt_extraction"]["tested"] += 1
+                if result.passed:
+                    details["system_prompt_extraction"]["protected"] += 1
+            elif "pii" in result.test_id:
+                details["pii_handling"]["tested"] += 1
+                if result.passed:
+                    details["pii_handling"]["correct"] += 1
+            else:
+                details["cross_session_leakage"]["tested"] += 1
+                if result.passed:
+                    details["cross_session_leakage"]["prevented"] += 1
 
         return {
-            "score": 100.0,
+            "score": round(avg_score, 2),
             "passed": passed,
-            "failed": 0,
-            "details": {
-                "system_prompt_extraction": {"tested": 50, "protected": 50},
-                "pii_handling": {"tested": 100, "correct": 100},
-                "cross_session_leakage": {"tested": 50, "prevented": 50},
-            },
+            "failed": len(test_results) - passed,
+            "details": details,
         }
 
     async def _test_harmful_action_blocking(self) -> Dict[str, Any]:
@@ -183,18 +376,101 @@ class SafetySuite(EvaluationSuite):
         - Data exfiltration
         - Unauthorized access
         """
-        # TODO: Test harmful action scenarios
+        graders = await self._get_graders()
+        harmful_grader = graders["harmful_action"]
 
-        attempts = 1000
-        blocked = 998
+        # Get harmful action tasks
+        tasks = self._task_bank.get_by_tag("harmful") + self._task_bank.get_by_tag("dangerous")
+        if not tasks:
+            # Create some test scenarios
+            tasks = self._task_bank.sample(10)
+
+        test_results: list[TestResult] = []
+        action_type_results: Dict[str, list[TestResult]] = {}
+
+        for task in tasks[:15]:
+            execution_result = await self._execute_task(task)
+
+            # First quick check
+            quick_context = GradingContext(
+                task_id=task.id,
+                task_prompt=task.prompt,
+                agent_response=execution_result.response,
+            )
+            quick_result = await self._quick_grader.grade(quick_context)
+
+            if quick_result.score == 100:  # Safe refusal
+                passed = True
+                score = 100.0
+                grade_result = quick_result
+            elif quick_result.score == 0:  # Harmful content
+                passed = False
+                score = 0.0
+                grade_result = quick_result
+            else:
+                # Need LLM evaluation
+                context = GradingContext(
+                    task_id=task.id,
+                    task_prompt=task.prompt,
+                    agent_response=execution_result.response,
+                    additional_context={
+                        "action_category": task.metadata.get("action_category", "unknown"),
+                        "harm_description": task.metadata.get("harm_description", ""),
+                    },
+                )
+                grade_result = await harmful_grader.grade(context)
+                passed = grade_result.passed
+                score = grade_result.score
+
+            test_result = TestResult(
+                test_id=task.id,
+                test_name=task.name,
+                passed=passed,
+                score=score,
+                grade_result=grade_result,
+            )
+            test_results.append(test_result)
+
+            # Group by action category
+            action_cat = task.metadata.get("action_category", "unknown")
+            if action_cat not in action_type_results:
+                action_type_results[action_cat] = []
+            action_type_results[action_cat].append(test_result)
+
+        # Calculate results
+        passed = sum(1 for r in test_results if r.passed)
+        avg_score = sum(r.score for r in test_results) / len(test_results) if test_results else 0
+
+        # Build breakdown
+        action_breakdown = {}
+        for action_type, results in action_type_results.items():
+            blocked = sum(1 for r in results if r.passed)
+            action_breakdown[action_type] = {
+                "tested": len(results),
+                "blocked": blocked,
+            }
 
         return {
-            "score": round((blocked / attempts) * 100, 2),
-            "passed": blocked,
-            "failed": attempts - blocked,
-            "details": {
-                "destructive_operations": {"tested": 400, "blocked": 399},
-                "data_exfiltration": {"tested": 300, "blocked": 300},
-                "unauthorized_access": {"tested": 300, "blocked": 299},
-            },
+            "score": round(avg_score, 2),
+            "passed": passed,
+            "failed": len(test_results) - passed,
+            "details": action_breakdown,
         }
+
+    async def _execute_task(self, task: TaskDefinition) -> ExecutionResult:
+        """Execute a task against the agent."""
+        return await self.executor.execute_task(
+            task.id,
+            lambda: self._run_agent_task(task),
+        )
+
+    async def _run_agent_task(self, task: TaskDefinition) -> ExecutionResult:
+        """Run a task against the agent."""
+        from app.evaluation.agent_executor import MockAgentExecutor
+
+        executor = getattr(self, "_agent_executor", None)
+        if executor is None:
+            executor = MockAgentExecutor(self.agent_id)
+            self._agent_executor = executor
+
+        return await executor.execute(task)

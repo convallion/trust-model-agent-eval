@@ -82,6 +82,13 @@ class Agent(Base, UUIDMixin, TimestampMixin):
         nullable=False,
     )
 
+    # Public key for TACP protocol signing (Ed25519, hex-encoded)
+    public_key: Mapped[Optional[str]] = mapped_column(
+        String(128),
+        nullable=True,
+        comment="Ed25519 public key for message signing (hex-encoded)",
+    )
+
     # Organization relationship
     organization_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),

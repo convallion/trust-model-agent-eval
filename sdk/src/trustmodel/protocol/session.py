@@ -212,11 +212,18 @@ class TACPSession:
                     )
                     return
 
-            # Create proof
+            # Create proof by signing the nonce with agent's private key
+            from trustmodel.protocol.signing import sign_nonce
+
+            nonce_signature = await sign_nonce(
+                agent_id=self.local_agent_id,
+                nonce=challenge.nonce,
+            )
+
             proof = TrustProof(
                 challenge_id=challenge.challenge_id,
                 certificate_id=cert.id,
-                nonce_signature="",  # Would be signed with private key
+                nonce_signature=nonce_signature,
             )
 
             await self.send_message(

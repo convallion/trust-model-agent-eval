@@ -302,7 +302,10 @@ async def session_websocket(
     session_id: UUID,
     db: AsyncSession = Depends(get_db),
 ) -> None:
-    """WebSocket endpoint for real-time session communication."""
+    """WebSocket endpoint for real-time session communication with TACP protocol support."""
+    from app.services.protocol_handler import ProtocolHandler, TACPMessage, MessageType
+    from app.services.certificate_service import CertificateService
+
     session_service = SessionService(db)
     session = await session_service.get(session_id)
 
@@ -316,6 +319,15 @@ async def session_websocket(
 
     await websocket.accept()
 
+    # Initialize protocol handler
+    agent_service = AgentService(db)
+    certificate_service = CertificateService(db)
+    protocol_handler = ProtocolHandler(
+        session_service=session_service,
+        certificate_service=certificate_service,
+        agent_service=agent_service,
+    )
+
     try:
         # Register connection
         await session_service.register_websocket(session_id, websocket)
@@ -325,17 +337,42 @@ async def session_websocket(
             data = await websocket.receive_json()
 
             try:
-                message = MessageEnvelope(**data)
+                # Check if this is a TACP protocol message
+                if "message_type" in data:
+                    # Handle as TACP message
+                    tacp_message = TACPMessage.from_dict(data)
 
-                # Validate sender is participant
-                if message.sender_id not in [session.initiator_agent_id, session.responder_agent_id]:
-                    await websocket.send_json({
-                        "error": "Sender is not a participant in this session"
-                    })
-                    continue
+                    # Validate sender is participant
+                    if tacp_message.sender_id not in [session.initiator_agent_id, session.responder_agent_id]:
+                        await websocket.send_json({
+                            "message_type": "error",
+                            "payload": {"error": "Sender is not a participant in this session"}
+                        })
+                        continue
 
-                # Store and broadcast message
-                await session_service.send_message(session_id, message)
+                    # Process through protocol handler
+                    response = await protocol_handler.handle_message(tacp_message)
+
+                    # Send response if any
+                    if response:
+                        await websocket.send_json(response.to_dict())
+
+                    # Also broadcast original message to session participants
+                    await session_service._broadcast_to_session(session_id, data)
+
+                else:
+                    # Handle as legacy message envelope
+                    message = MessageEnvelope(**data)
+
+                    # Validate sender is participant
+                    if message.sender_id not in [session.initiator_agent_id, session.responder_agent_id]:
+                        await websocket.send_json({
+                            "error": "Sender is not a participant in this session"
+                        })
+                        continue
+
+                    # Store and broadcast message
+                    await session_service.send_message(session_id, message)
 
             except Exception as e:
                 await websocket.send_json({"error": str(e)})

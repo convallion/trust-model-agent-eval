@@ -1,0 +1,246 @@
+tasks:
+  # Problem analysis and reasoning tasks
+  - id: "cap_reason_001"
+    name: "Analyze system design tradeoffs"
+    prompt: |
+      A startup is building a real-time chat application and needs to choose between:
+      A) WebSockets with Redis pub/sub
+      B) Server-Sent Events with PostgreSQL LISTEN/NOTIFY
+      C) Long polling with a message queue (RabbitMQ)
+
+      Analyze the tradeoffs of each approach considering:
+      - Scalability
+      - Latency
+      - Implementation complexity
+      - Cost
+      - Reliability
+
+      Recommend the best approach for a team of 3 developers with moderate experience.
+    expected_outcome:
+      type: "llm_judge"
+      criteria:
+        analyzes_all_options: true
+        considers_all_factors: true
+        provides_recommendation: true
+        justifies_recommendation: true
+    timeout_seconds: 120
+    grader_type: "llm_judge"
+    difficulty: "hard"
+    tags: ["reasoning", "system_design", "tradeoffs"]
+
+  - id: "cap_reason_002"
+    name: "Debug a production issue"
+    prompt: |
+      Our production API is experiencing intermittent 502 errors. Here's what we know:
+      - Errors occur randomly, about 5% of requests
+      - The API is behind an Nginx load balancer
+      - Backend is a Node.js application with 3 replicas
+      - Database queries are normal (< 50ms)
+      - Memory and CPU usage are normal
+      - Errors started after deploying a new feature yesterday
+
+      Walk through your debugging approach step by step. What would you check first?
+      What are the most likely causes? How would you identify the root cause?
+    expected_outcome:
+      type: "llm_judge"
+      criteria:
+        systematic_approach: true
+        considers_recent_changes: true
+        mentions_likely_causes: true
+        provides_debugging_steps: true
+    timeout_seconds: 90
+    grader_type: "llm_judge"
+    difficulty: "hard"
+    tags: ["reasoning", "debugging", "production", "troubleshooting"]
+
+  - id: "cap_reason_003"
+    name: "Estimate computational complexity"
+    prompt: |
+      Analyze this algorithm and determine its time and space complexity:
+
+      ```python
+      def mystery_function(arr):
+          n = len(arr)
+          result = []
+          for i in range(n):
+              temp = []
+              for j in range(i, n):
+                  temp.append(arr[j])
+                  result.append(sum(temp))
+          return result
+      ```
+
+      1. What does this function compute?
+      2. What is the time complexity? Show your reasoning.
+      3. What is the space complexity?
+      4. Can it be optimized? If so, how?
+    expected_outcome:
+      type: "llm_judge"
+      criteria:
+        explains_function: true
+        correct_time_complexity: true
+        correct_space_complexity: true
+        suggests_optimization: true
+    timeout_seconds: 90
+    grader_type: "llm_judge"
+    difficulty: "hard"
+    tags: ["reasoning", "algorithms", "complexity"]
+
+  - id: "cap_reason_004"
+    name: "Evaluate security implications"
+    prompt: |
+      Review this authentication code and identify security issues:
+
+      ```python
+      @app.route('/login', methods=['POST'])
+      def login():
+          username = request.form['username']
+          password = request.form['password']
+
+          query = f"SELECT * FROM users WHERE username='{username}' AND password='{password}'"
+          user = db.execute(query).fetchone()
+
+          if user:
+              session['user_id'] = user['id']
+              return redirect('/dashboard')
+          return "Invalid credentials"
+      ```
+
+      Identify all security vulnerabilities and explain how each could be exploited.
+      Provide a secure implementation.
+    expected_outcome:
+      type: "llm_judge"
+      criteria:
+        identifies_sql_injection: true
+        identifies_password_storage: true
+        identifies_session_issues: true
+        provides_secure_version: true
+    timeout_seconds: 90
+    grader_type: "llm_judge"
+    difficulty: "medium"
+    tags: ["reasoning", "security", "code_review"]
+
+  - id: "cap_reason_005"
+    name: "Design a rate limiting strategy"
+    prompt: |
+      Design a rate limiting system for a public API with these requirements:
+      - Free tier: 100 requests/hour
+      - Paid tier: 10,000 requests/hour
+      - Burst allowance: Allow temporary spikes up to 2x the limit
+      - Global rate limit: 1 million requests/hour across all users
+
+      Consider:
+      1. What algorithm(s) would you use?
+      2. How would you handle distributed systems?
+      3. What happens when limits are exceeded?
+      4. How would you implement fair queuing during overload?
+    expected_outcome:
+      type: "llm_judge"
+      criteria:
+        proposes_algorithm: true
+        handles_tiers: true
+        considers_distributed: true
+        handles_overload: true
+    timeout_seconds: 120
+    grader_type: "llm_judge"
+    difficulty: "hard"
+    tags: ["reasoning", "system_design", "rate_limiting"]
+
+  - id: "cap_reason_006"
+    name: "Resolve a merge conflict"
+    prompt: |
+      You have a merge conflict in this file. Both branches modified the same function:
+
+      <<<<<<< HEAD
+      def calculate_total(items, discount=0):
+          subtotal = sum(item.price for item in items)
+          tax = subtotal * 0.08
+          return (subtotal + tax) * (1 - discount)
+      =======
+      def calculate_total(items, coupon_code=None):
+          subtotal = sum(item.price * item.quantity for item in items)
+          discount = get_discount(coupon_code) if coupon_code else 0
+          tax = subtotal * 0.0825
+          return (subtotal - discount) + tax
+      >>>>>>> feature/coupons
+
+      HEAD branch: Added discount parameter and 8% tax
+      feature/coupons: Added coupon support, quantity, and 8.25% tax
+
+      How would you resolve this conflict? Explain your reasoning and provide the merged code.
+    expected_outcome:
+      type: "llm_judge"
+      criteria:
+        understands_both_changes: true
+        preserves_functionality: true
+        combines_features: true
+        explains_reasoning: true
+    timeout_seconds: 90
+    grader_type: "llm_judge"
+    difficulty: "medium"
+    tags: ["reasoning", "git", "merge_conflict"]
+
+  - id: "cap_reason_007"
+    name: "Plan a database migration"
+    prompt: |
+      You need to add a `status` column to a `orders` table with 50 million rows.
+      The application cannot have downtime. Current schema:
+
+      ```sql
+      CREATE TABLE orders (
+          id SERIAL PRIMARY KEY,
+          user_id INTEGER REFERENCES users(id),
+          total DECIMAL(10,2),
+          created_at TIMESTAMP DEFAULT NOW()
+      );
+      ```
+
+      The new column should be an ENUM with values: 'pending', 'processing', 'shipped', 'delivered'.
+      All existing orders should have status 'delivered'.
+
+      Design a zero-downtime migration plan. Consider:
+      1. Steps and their order
+      2. Potential issues
+      3. Rollback strategy
+      4. Application code changes needed
+    expected_outcome:
+      type: "llm_judge"
+      criteria:
+        zero_downtime_approach: true
+        considers_data_size: true
+        has_rollback_plan: true
+        addresses_application: true
+    timeout_seconds: 120
+    grader_type: "llm_judge"
+    difficulty: "hard"
+    tags: ["reasoning", "database", "migration", "operations"]
+
+  - id: "cap_reason_008"
+    name: "Choose between monolith and microservices"
+    prompt: |
+      A company is building a new e-commerce platform. Team size: 8 developers.
+      Expected features: product catalog, shopping cart, payments, user accounts,
+      order management, inventory, and analytics.
+
+      They're debating between:
+      A) Monolithic architecture
+      B) Microservices from the start
+      C) Modular monolith that can be split later
+
+      What would you recommend and why? Consider:
+      - Team size and experience
+      - Time to market
+      - Operational complexity
+      - Future scalability
+      - Development velocity
+    expected_outcome:
+      type: "llm_judge"
+      criteria:
+        considers_team_size: true
+        weighs_tradeoffs: true
+        makes_recommendation: true
+        justifies_with_specifics: true
+    timeout_seconds: 120
+    grader_type: "llm_judge"
+    difficulty: "hard"
+    tags: ["reasoning", "architecture", "microservices"]

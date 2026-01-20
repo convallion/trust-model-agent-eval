@@ -1,0 +1,211 @@
+tasks:
+  # Simple coding tasks
+  - id: "cap_tc_001"
+    name: "Write a Python function to reverse a string"
+    prompt: |
+      Write a Python function called `reverse_string` that takes a string as input
+      and returns the reversed string. Include a docstring.
+    expected_outcome:
+      type: "content_match"
+      criteria:
+        required_keywords: ["def reverse_string", "return", '"""']
+        pattern: "def\\s+reverse_string\\s*\\(\\s*\\w+\\s*\\)"
+    timeout_seconds: 30
+    grader_type: "llm_judge"
+    difficulty: "easy"
+    tags: ["coding", "python", "strings"]
+
+  - id: "cap_tc_002"
+    name: "Calculate factorial recursively"
+    prompt: |
+      Write a Python function called `factorial` that calculates the factorial
+      of a non-negative integer using recursion. Handle the base case of 0! = 1.
+    expected_outcome:
+      type: "llm_judge"
+      criteria:
+        must_include: ["recursion", "base case"]
+        must_not_include: ["itertools", "math.factorial"]
+    timeout_seconds: 30
+    grader_type: "llm_judge"
+    difficulty: "easy"
+    tags: ["coding", "python", "recursion"]
+
+  - id: "cap_tc_003"
+    name: "Implement binary search"
+    prompt: |
+      Implement a binary search algorithm in Python. The function should be called
+      `binary_search(arr, target)` and return the index of the target if found,
+      or -1 if not found. Assume the input array is sorted.
+    expected_outcome:
+      type: "llm_judge"
+      criteria:
+        algorithm: "binary_search"
+        complexity: "O(log n)"
+    timeout_seconds: 45
+    grader_type: "llm_judge"
+    difficulty: "medium"
+    tags: ["coding", "python", "algorithms", "search"]
+
+  - id: "cap_tc_004"
+    name: "Parse JSON and extract nested values"
+    prompt: |
+      Write a Python function `extract_nested_value(data, path)` that takes a nested
+      dictionary/JSON object and a dot-separated path string (e.g., "user.address.city")
+      and returns the value at that path. Return None if the path doesn't exist.
+    expected_outcome:
+      type: "llm_judge"
+      criteria:
+        handles_nested: true
+        handles_missing: true
+    timeout_seconds: 45
+    grader_type: "llm_judge"
+    difficulty: "medium"
+    tags: ["coding", "python", "json", "data"]
+
+  - id: "cap_tc_005"
+    name: "Create a REST API endpoint specification"
+    prompt: |
+      Design a REST API endpoint for a user registration system. Include:
+      - HTTP method and path
+      - Request body schema (JSON)
+      - Response schema for success and error cases
+      - Example request and response
+    expected_outcome:
+      type: "llm_judge"
+      criteria:
+        includes_method: true
+        includes_path: true
+        includes_request_body: true
+        includes_response: true
+    timeout_seconds: 60
+    grader_type: "llm_judge"
+    difficulty: "medium"
+    tags: ["api", "design", "rest"]
+
+  # Complex multi-step tasks
+  - id: "cap_tc_006"
+    name: "Implement a simple LRU cache"
+    prompt: |
+      Implement an LRU (Least Recently Used) cache class in Python with:
+      - `__init__(self, capacity)` - Initialize with given capacity
+      - `get(key)` - Return value if key exists, -1 otherwise
+      - `put(key, value)` - Insert or update key-value pair
+
+      The cache should evict the least recently used item when capacity is exceeded.
+    expected_outcome:
+      type: "llm_judge"
+      criteria:
+        has_get_method: true
+        has_put_method: true
+        implements_lru: true
+        handles_capacity: true
+    timeout_seconds: 90
+    grader_type: "llm_judge"
+    difficulty: "hard"
+    tags: ["coding", "python", "data_structures", "cache"]
+
+  - id: "cap_tc_007"
+    name: "Debug and fix a broken function"
+    prompt: |
+      The following function is supposed to find all pairs in a list that sum to a target,
+      but it has bugs. Find and fix all the bugs:
+
+      ```python
+      def find_pairs(nums, target):
+          pairs = []
+          for i in range(len(nums)):
+              for j in range(len(nums)):
+                  if nums[i] + nums[j] == target:
+                      pairs.append((nums[i], nums[j]))
+          return pairs
+      ```
+
+      Issues to fix: duplicate pairs, same element paired with itself.
+    expected_outcome:
+      type: "llm_judge"
+      criteria:
+        fixes_duplicates: true
+        fixes_self_pairing: true
+        correct_logic: true
+    timeout_seconds: 60
+    grader_type: "llm_judge"
+    difficulty: "medium"
+    tags: ["coding", "python", "debugging"]
+
+  - id: "cap_tc_008"
+    name: "Explain and improve code performance"
+    prompt: |
+      Analyze this code and suggest improvements:
+
+      ```python
+      def count_occurrences(words, search_word):
+          count = 0
+          for word in words:
+              if word.lower() == search_word.lower():
+                  count = count + 1
+          return count
+      ```
+
+      1. Explain what this code does
+      2. Identify any performance issues
+      3. Provide an improved version
+    expected_outcome:
+      type: "llm_judge"
+      criteria:
+        explains_code: true
+        identifies_issues: true
+        provides_improvement: true
+    timeout_seconds: 60
+    grader_type: "llm_judge"
+    difficulty: "medium"
+    tags: ["coding", "python", "optimization", "analysis"]
+
+  - id: "cap_tc_009"
+    name: "Write unit tests for a function"
+    prompt: |
+      Write comprehensive unit tests for this function using pytest:
+
+      ```python
+      def validate_email(email: str) -> bool:
+          import re
+          pattern = r'^[\w\.-]+@[\w\.-]+\.\w+$'
+          return bool(re.match(pattern, email))
+      ```
+
+      Include tests for: valid emails, invalid formats, edge cases.
+    expected_outcome:
+      type: "llm_judge"
+      criteria:
+        uses_pytest: true
+        tests_valid_cases: true
+        tests_invalid_cases: true
+        tests_edge_cases: true
+    timeout_seconds: 60
+    grader_type: "llm_judge"
+    difficulty: "medium"
+    tags: ["coding", "python", "testing", "pytest"]
+
+  - id: "cap_tc_010"
+    name: "Design a database schema"
+    prompt: |
+      Design a relational database schema for an e-commerce system with:
+      - Users (can be customers or admins)
+      - Products (with categories)
+      - Orders (with multiple items)
+      - Reviews (users can review products)
+
+      Provide CREATE TABLE statements for PostgreSQL with appropriate:
+      - Primary and foreign keys
+      - Indexes for common queries
+      - Constraints
+    expected_outcome:
+      type: "llm_judge"
+      criteria:
+        has_all_tables: true
+        has_relationships: true
+        has_indexes: true
+        has_constraints: true
+    timeout_seconds: 120
+    grader_type: "llm_judge"
+    difficulty: "hard"
+    tags: ["database", "sql", "design", "postgres"]

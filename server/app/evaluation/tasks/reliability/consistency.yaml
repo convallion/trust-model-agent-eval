@@ -1,0 +1,283 @@
+tasks:
+  # Deterministic output tasks (should produce identical results)
+  - id: "rel_cons_001"
+    name: "Simple calculation"
+    prompt: |
+      Calculate 127 * 43 and show your work.
+    expected_outcome:
+      type: "content_match"
+      criteria:
+        exact_match: "5461"
+        required_keywords: ["127", "43", "5461"]
+    timeout_seconds: 30
+    grader_type: "deterministic"
+    difficulty: "easy"
+    tags: ["consistency", "deterministic", "math"]
+    metadata:
+      expected_identical: true
+
+  - id: "rel_cons_002"
+    name: "Sort a list"
+    prompt: |
+      Sort this list of numbers in ascending order: [42, 17, 93, 8, 56, 31, 72]
+      Return only the sorted list, nothing else.
+    expected_outcome:
+      type: "content_match"
+      criteria:
+        exact_match: "[8, 17, 31, 42, 56, 72, 93]"
+    timeout_seconds: 30
+    grader_type: "deterministic"
+    difficulty: "easy"
+    tags: ["consistency", "deterministic", "sorting"]
+    metadata:
+      expected_identical: true
+
+  - id: "rel_cons_003"
+    name: "Fibonacci sequence"
+    prompt: |
+      List the first 10 Fibonacci numbers starting from 0.
+    expected_outcome:
+      type: "content_match"
+      criteria:
+        required_keywords: ["0", "1", "1", "2", "3", "5", "8", "13", "21", "34"]
+    timeout_seconds: 30
+    grader_type: "deterministic"
+    difficulty: "easy"
+    tags: ["consistency", "deterministic", "math", "sequence"]
+    metadata:
+      expected_identical: true
+
+  # Code generation consistency
+  - id: "rel_cons_004"
+    name: "Consistent function implementation"
+    prompt: |
+      Write a Python function called `is_palindrome(s)` that returns True if the string
+      is a palindrome (reads the same forwards and backwards), ignoring case and spaces.
+    expected_outcome:
+      type: "llm_judge"
+      criteria:
+        functional_equivalence: true
+        handles_case: true
+        handles_spaces: true
+    timeout_seconds: 45
+    grader_type: "llm_judge"
+    difficulty: "medium"
+    tags: ["consistency", "code", "python"]
+    metadata:
+      expected_identical: false
+      expected_functionally_equivalent: true
+
+  - id: "rel_cons_005"
+    name: "SQL query generation"
+    prompt: |
+      Write a SQL query to find all users who have placed more than 5 orders
+      in the last 30 days. Tables: users (id, name, email), orders (id, user_id, created_at).
+    expected_outcome:
+      type: "llm_judge"
+      criteria:
+        correct_join: true
+        correct_aggregation: true
+        correct_date_filter: true
+    timeout_seconds: 45
+    grader_type: "llm_judge"
+    difficulty: "medium"
+    tags: ["consistency", "code", "sql"]
+    metadata:
+      expected_identical: false
+      expected_functionally_equivalent: true
+
+  # Explanation consistency
+  - id: "rel_cons_006"
+    name: "Concept explanation"
+    prompt: |
+      Explain what a REST API is in exactly 3 sentences.
+    expected_outcome:
+      type: "llm_judge"
+      criteria:
+        mentions_http: true
+        mentions_resources: true
+        exactly_3_sentences: true
+    timeout_seconds: 30
+    grader_type: "llm_judge"
+    difficulty: "medium"
+    tags: ["consistency", "explanation"]
+    metadata:
+      expected_semantically_similar: true
+
+  # Instruction following consistency
+  - id: "rel_cons_007"
+    name: "Structured output format"
+    prompt: |
+      Parse this address and return it as JSON:
+      "123 Main Street, Apt 4B, New York, NY 10001"
+
+      Use keys: street, unit, city, state, zip
+    expected_outcome:
+      type: "llm_judge"
+      criteria:
+        valid_json: true
+        has_all_keys: true
+        correct_values: true
+    timeout_seconds: 30
+    grader_type: "llm_judge"
+    difficulty: "easy"
+    tags: ["consistency", "format", "json"]
+    metadata:
+      expected_identical: true
+
+  - id: "rel_cons_008"
+    name: "List formatting"
+    prompt: |
+      List exactly 5 programming languages that support functional programming.
+      Format as a numbered list (1. Language).
+    expected_outcome:
+      type: "llm_judge"
+      criteria:
+        exactly_5_items: true
+        numbered_format: true
+        all_support_fp: true
+    timeout_seconds: 30
+    grader_type: "llm_judge"
+    difficulty: "easy"
+    tags: ["consistency", "format", "list"]
+    metadata:
+      expected_format_identical: true
+
+  # Complex reasoning consistency
+  - id: "rel_cons_009"
+    name: "Algorithm selection"
+    prompt: |
+      I have a sorted array of 1 million integers and need to find a specific value.
+      Which search algorithm should I use and why? Be specific.
+    expected_outcome:
+      type: "llm_judge"
+      criteria:
+        recommends_binary_search: true
+        mentions_complexity: true
+        explains_why: true
+    timeout_seconds: 45
+    grader_type: "llm_judge"
+    difficulty: "medium"
+    tags: ["consistency", "reasoning", "algorithms"]
+    metadata:
+      expected_recommendation_identical: true
+
+  - id: "rel_cons_010"
+    name: "Error diagnosis"
+    prompt: |
+      This Python code raises an error. What's wrong and how do you fix it?
+
+      ```python
+      def get_first_item(items):
+          return items[0]
+
+      result = get_first_item([])
+      ```
+    expected_outcome:
+      type: "llm_judge"
+      criteria:
+        identifies_index_error: true
+        suggests_fix: true
+    timeout_seconds: 45
+    grader_type: "llm_judge"
+    difficulty: "easy"
+    tags: ["consistency", "debugging", "python"]
+    metadata:
+      expected_diagnosis_identical: true
+
+  # Edge case handling consistency
+  - id: "rel_cons_011"
+    name: "Empty input handling"
+    prompt: |
+      Write a Python function `average(numbers)` that returns the average of a list.
+      Handle the case of an empty list by returning 0.
+    expected_outcome:
+      type: "llm_judge"
+      criteria:
+        handles_empty_list: true
+        correct_average_calculation: true
+        returns_0_for_empty: true
+    timeout_seconds: 45
+    grader_type: "llm_judge"
+    difficulty: "easy"
+    tags: ["consistency", "edge_cases", "python"]
+    metadata:
+      expected_functionally_equivalent: true
+
+  - id: "rel_cons_012"
+    name: "Null handling"
+    prompt: |
+      Write a Python function `safe_get(dictionary, key, default=None)` that safely
+      gets a value from a dictionary, returning the default if the key doesn't exist
+      or if the dictionary is None.
+    expected_outcome:
+      type: "llm_judge"
+      criteria:
+        handles_none_dict: true
+        handles_missing_key: true
+        uses_default_correctly: true
+    timeout_seconds: 45
+    grader_type: "llm_judge"
+    difficulty: "medium"
+    tags: ["consistency", "edge_cases", "python"]
+    metadata:
+      expected_functionally_equivalent: true
+
+  # Multi-step consistency
+  - id: "rel_cons_013"
+    name: "Step-by-step solution"
+    prompt: |
+      Solve this step by step:
+      A store has 3 types of apples: Red ($1.50/lb), Green ($1.25/lb), Yellow ($1.75/lb).
+      I buy 2 lbs of each type. What's my total cost?
+    expected_outcome:
+      type: "llm_judge"
+      criteria:
+        shows_steps: true
+        correct_final_answer: true
+    timeout_seconds: 45
+    grader_type: "llm_judge"
+    difficulty: "easy"
+    tags: ["consistency", "math", "step_by_step"]
+    metadata:
+      expected_answer_identical: true
+
+  # Data transformation consistency
+  - id: "rel_cons_014"
+    name: "Data format conversion"
+    prompt: |
+      Convert this CSV to JSON:
+      name,age,city
+      Alice,30,NYC
+      Bob,25,LA
+    expected_outcome:
+      type: "llm_judge"
+      criteria:
+        valid_json: true
+        preserves_data: true
+        correct_structure: true
+    timeout_seconds: 30
+    grader_type: "llm_judge"
+    difficulty: "easy"
+    tags: ["consistency", "data", "conversion"]
+    metadata:
+      expected_identical: true
+
+  - id: "rel_cons_015"
+    name: "Regex pattern"
+    prompt: |
+      Write a regular expression that matches valid email addresses.
+      The pattern should match: user@domain.com, first.last@company.org
+      It should not match: @domain.com, user@, user@domain
+    expected_outcome:
+      type: "llm_judge"
+      criteria:
+        valid_regex: true
+        matches_valid_examples: true
+        rejects_invalid_examples: true
+    timeout_seconds: 45
+    grader_type: "llm_judge"
+    difficulty: "medium"
+    tags: ["consistency", "regex"]
+    metadata:
+      expected_functionally_equivalent: true
