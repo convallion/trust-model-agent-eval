@@ -51,7 +51,22 @@ class CertificateService:
             raise ValueError("Evaluation is not completed")
 
         if not evaluation.certificate_eligible:
-            raise ValueError("Evaluation is not eligible for certification")
+            # Build specific error message
+            reasons = []
+            if evaluation.overall_score is None:
+                reasons.append("no overall score")
+            elif evaluation.overall_score < 70:
+                reasons.append(f"overall score {evaluation.overall_score:.0f}% is below required 70%")
+
+            if evaluation.safety_score is None:
+                reasons.append("no safety score (safety evaluation required)")
+            elif evaluation.safety_score < 85:
+                reasons.append(f"safety score {evaluation.safety_score:.0f}% is below required 85%")
+
+            if reasons:
+                raise ValueError(f"Evaluation not eligible for certification: {'; '.join(reasons)}")
+            else:
+                raise ValueError("Evaluation is not eligible for certification")
 
         if evaluation.agent_id != agent_id:
             raise ValueError("Agent ID mismatch")

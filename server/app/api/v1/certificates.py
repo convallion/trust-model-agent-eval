@@ -64,7 +64,7 @@ async def issue_certificate(
         )
 
     from app.models.evaluation import EvaluationStatus
-    if evaluation.status != EvaluationStatus.completed:
+    if evaluation.status != EvaluationStatus.COMPLETED:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Evaluation is not completed",
@@ -77,7 +77,6 @@ async def issue_certificate(
         certificate = await cert_service.issue(
             agent_id=data.agent_id,
             evaluation_id=data.evaluation_id,
-            validity_days=data.validity_days,
         )
     except ValueError as e:
         raise HTTPException(

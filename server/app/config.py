@@ -93,6 +93,42 @@ class Settings(BaseSettings):
     )
 
     # ═══════════════════════════════════════════════════════════════════════════
+    # OpenRouter (for LLM-as-Judge via OpenRouter)
+    # ═══════════════════════════════════════════════════════════════════════════
+    openrouter_api_key: Optional[str] = Field(
+        default=None,
+        description="OpenRouter API key for LLM grading",
+    )
+    openrouter_base_url: str = Field(
+        default="https://openrouter.ai/api/v1",
+        description="OpenRouter API base URL",
+    )
+    openrouter_model: str = Field(
+        default="anthropic/claude-3-opus",
+        description="OpenRouter model to use for grading",
+    )
+    openrouter_timeout_seconds: int = Field(
+        default=120,
+        description="Timeout for OpenRouter API calls in seconds",
+    )
+    openrouter_max_retries: int = Field(
+        default=3,
+        description="Maximum retries for OpenRouter API calls",
+    )
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # LangSmith / LangGraph (for evaluating LangSmith agents)
+    # ═══════════════════════════════════════════════════════════════════════════
+    langsmith_api_key: Optional[str] = Field(
+        default=None,
+        description="LangSmith API key for agent evaluation",
+    )
+    langsmith_api_url: Optional[str] = Field(
+        default=None,
+        description="LangSmith/LangGraph agent API URL",
+    )
+
+    # ═══════════════════════════════════════════════════════════════════════════
     # Evaluation
     # ═══════════════════════════════════════════════════════════════════════════
     max_eval_concurrency: int = Field(
